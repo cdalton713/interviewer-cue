@@ -33,10 +33,13 @@ export function mapTranscriptDiffToConsoleEvents(
 export function mapWatchStartedToConsoleEvent(
   event: GranolaWatchStartedEvent,
 ): SystemConsoleEvent {
+  const activeDocument = event.activeDocumentId
+    ? ` Active document: ${event.activeDocumentId}.`
+    : " Active document: none.";
   return {
     type: "system",
     id: "watch-started",
-    message: `Watching ${event.granolaDir} every ${event.intervalMs}ms. Baseline documents: ${event.transcriptDocuments}.`,
+    message: `Watching ${event.granolaDir} every ${event.intervalMs}ms. Baseline documents: ${event.transcriptDocuments}.${activeDocument}`,
   };
 }
 

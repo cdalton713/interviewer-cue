@@ -11,7 +11,19 @@ describe("parseWatchArgs", () => {
 
     expect(args.intervalMs).toBe(1000);
     expect(args.granolaDir).toBe("/tmp/granola");
-    expect(args.emitExisting).toBe(true);
+    expect(args.changesOnly).toBe(false);
+  });
+
+  it("preloads existing transcript entries by default", () => {
+    expect(parseWatchArgs([], "/granola").changesOnly).toBe(false);
+  });
+
+  it("supports changes-only mode", () => {
+    expect(parseWatchArgs(["--changes-only"], "/granola").changesOnly).toBe(true);
+  });
+
+  it("keeps emit-existing as a backwards-compatible preload alias", () => {
+    expect(parseWatchArgs(["--emit-existing"], "/granola").changesOnly).toBe(false);
   });
 
   it("rejects very tight polling", () => {
@@ -29,6 +41,7 @@ describe("parseWatchArgs", () => {
   it("keeps watch help available for the CLI entrypoint", () => {
     expect(parseWatchArgs(["--help"], "/granola").help).toBe(true);
     expect(getWatchHelp()).toContain("--interval-ms <ms>");
+    expect(getWatchHelp()).toContain("--changes-only");
     expect(getWatchHelp()).toContain("--granola-dir <path>");
   });
 });

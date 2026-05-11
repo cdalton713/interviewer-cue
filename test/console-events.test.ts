@@ -11,6 +11,7 @@ describe("mapTranscriptDiffToConsoleEvents", () => {
     const events = mapTranscriptDiffToConsoleEvents({
       type: "transcript_diff",
       observedAt: "2026-05-11T12:00:00.000Z",
+      activeDocumentId: "docA",
       added: [
         {
           key: "docA:utt1",
@@ -77,11 +78,13 @@ describe("watch status console event mappers", () => {
         granolaDir: "/granola",
         intervalMs: 2000,
         transcriptDocuments: 3,
+        activeDocumentId: "docA",
       }),
     ).toEqual({
       type: "system",
       id: "watch-started",
-      message: "Watching /granola every 2000ms. Baseline documents: 3.",
+      message:
+        "Watching /granola every 2000ms. Baseline documents: 3. Active document: docA.",
     });
 
     expect(

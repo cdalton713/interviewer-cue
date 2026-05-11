@@ -36,5 +36,5 @@ export interface DecryptArgs {
 
 export interface WatchArgs extends DecryptArgs {
   intervalMs: number;
-  emitExisting: boolean;
+  changesOnly: boolean;
 }

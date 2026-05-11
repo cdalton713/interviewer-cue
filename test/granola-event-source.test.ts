@@ -8,22 +8,85 @@ import {
 import type { GranolaCacheFile, WatchArgs } from "../src/granola/types.js";
 
 describe("createGranolaEventSource", () => {
-  it("baselines the current cache on startup and emits only new changes", () => {
+  it("selects the newest transcript document on startup and preloads it by default", () => {
     const callbacks = createCallbacks();
     const deps = createFakeDependencies({
       initialCache: transcriptCache({
-        docA: [{ id: "utt1", text: "already here" }],
+        docA: [{ id: "utt1", text: "older", end_timestamp: "10" }],
+        docB: [{ id: "utt2", text: "current", end_timestamp: "20" }],
       }),
       initialMtime: 10,
     });
     const source = createGranolaEventSource(baseArgs(), callbacks, deps);
 
     source.start();
+
+    expect(callbacks.started).toHaveBeenCalledWith({
+      type: "watch_started",
+      granolaDir: "/granola",
+      intervalMs: 1000,
+      transcriptDocuments: 2,
+      activeDocumentId: "docB",
+    });
+    expect(callbacks.transcriptDiff).toHaveBeenCalledOnce();
+    expect(callbacks.transcriptDiff.mock.calls[0]?.[0]).toMatchObject({
+      type: "transcript_diff",
+      activeDocumentId: "docB",
+      added: [
+        {
+          key: "docB:utt2",
+          documentId: "docB",
+          utterance: { text: "current" },
+        },
+      ],
+    });
+  });
+
+  it("honors an explicit transcript document id", () => {
+    const callbacks = createCallbacks();
+    const deps = createFakeDependencies({
+      initialCache: transcriptCache({
+        docA: [{ id: "utt1", text: "chosen", end_timestamp: "10" }],
+        docB: [{ id: "utt2", text: "newest", end_timestamp: "20" }],
+      }),
+      initialMtime: 10,
+    });
+    const source = createGranolaEventSource(
+      { ...baseArgs(), transcriptDocumentId: "docA" },
+      callbacks,
+      deps,
+    );
+
+    source.start();
+
+    expect(callbacks.started.mock.calls[0]?.[0].activeDocumentId).toBe("docA");
+    expect(callbacks.transcriptDiff.mock.calls[0]?.[0].added).toMatchObject([
+      { key: "docA:utt1", documentId: "docA", utterance: { text: "chosen" } },
+    ]);
+  });
+
+  it("emits only future changes with changes-only mode", () => {
+    const callbacks = createCallbacks();
+    const deps = createFakeDependencies({
+      initialCache: transcriptCache({
+        docA: [{ id: "utt1", text: "already here", end_timestamp: "10" }],
+      }),
+      initialMtime: 10,
+    });
+    const source = createGranolaEventSource(
+      { ...baseArgs(), changesOnly: true },
+      callbacks,
+      deps,
+    );
+
+    source.start();
+    expect(callbacks.transcriptDiff).not.toHaveBeenCalled();
+
     deps.setCache(
       transcriptCache({
         docA: [
-          { id: "utt1", text: "already here" },
-          { id: "utt2", text: "new words" },
+          { id: "utt1", text: "already here", end_timestamp: "10" },
+          { id: "utt2", text: "new words", end_timestamp: "11" },
         ],
       }),
       11,
@@ -35,27 +98,107 @@ describe("createGranolaEventSource", () => {
       granolaDir: "/granola",
       intervalMs: 1000,
       transcriptDocuments: 1,
+      activeDocumentId: "docA",
     });
     expect(callbacks.transcriptDiff).toHaveBeenCalledOnce();
-    expect(callbacks.transcriptDiff.mock.calls[0]?.[0].added).toMatchObject([
-      { key: "docA:utt2", documentId: "docA", utterance: { text: "new words" } },
-    ]);
+    expect(callbacks.transcriptDiff.mock.calls[0]?.[0]).toMatchObject({
+      activeDocumentId: "docA",
+      added: [
+        {
+          key: "docA:utt2",
+          documentId: "docA",
+          utterance: { text: "new words" },
+        },
+      ],
+    });
   });
 
-  it("emits updates for changed utterances", () => {
+  it("ignores older documents while the current document stays active", () => {
     const callbacks = createCallbacks();
     const deps = createFakeDependencies({
       initialCache: transcriptCache({
-        docA: [{ id: "utt1", text: "hel", is_final: false }],
+        docA: [{ id: "utt1", text: "older", end_timestamp: "10" }],
+        docB: [{ id: "utt2", text: "current", end_timestamp: "20" }],
       }),
       initialMtime: 10,
     });
-    const source = createGranolaEventSource(baseArgs(), callbacks, deps);
+    const source = createGranolaEventSource(
+      { ...baseArgs(), changesOnly: true },
+      callbacks,
+      deps,
+    );
 
     source.start();
     deps.setCache(
       transcriptCache({
-        docA: [{ id: "utt1", text: "hello", is_final: true }],
+        docA: [
+          { id: "utt1", text: "older", end_timestamp: "10" },
+          { id: "utt3", text: "still older", end_timestamp: "15" },
+        ],
+        docB: [{ id: "utt2", text: "current", end_timestamp: "20" }],
+      }),
+      11,
+    );
+    deps.tick();
+
+    expect(callbacks.transcriptDiff).not.toHaveBeenCalled();
+  });
+
+  it("switches focus when another document receives newer live utterances", () => {
+    const callbacks = createCallbacks();
+    const deps = createFakeDependencies({
+      initialCache: transcriptCache({
+        docA: [{ id: "utt1", text: "current", end_timestamp: "20" }],
+        docB: [{ id: "utt2", text: "older", end_timestamp: "10" }],
+      }),
+      initialMtime: 10,
+    });
+    const source = createGranolaEventSource(
+      { ...baseArgs(), changesOnly: true },
+      callbacks,
+      deps,
+    );
+
+    source.start();
+    deps.setCache(
+      transcriptCache({
+        docA: [{ id: "utt1", text: "current", end_timestamp: "20" }],
+        docB: [
+          { id: "utt2", text: "older", end_timestamp: "10" },
+          { id: "utt3", text: "new meeting", end_timestamp: "30" },
+        ],
+      }),
+      11,
+    );
+    deps.tick();
+
+    expect(callbacks.transcriptDiff).toHaveBeenCalledOnce();
+    expect(callbacks.transcriptDiff.mock.calls[0]?.[0]).toMatchObject({
+      activeDocumentId: "docB",
+      added: [
+        { key: "docB:utt3", documentId: "docB", utterance: { text: "new meeting" } },
+      ],
+    });
+  });
+
+  it("keeps stable updates for partial utterances", () => {
+    const callbacks = createCallbacks();
+    const deps = createFakeDependencies({
+      initialCache: transcriptCache({
+        docA: [{ id: "utt1", text: "hel", is_final: false, end_timestamp: "10" }],
+      }),
+      initialMtime: 10,
+    });
+    const source = createGranolaEventSource(
+      { ...baseArgs(), changesOnly: true },
+      callbacks,
+      deps,
+    );
+
+    source.start();
+    deps.setCache(
+      transcriptCache({
+        docA: [{ id: "utt1", text: "hello", is_final: true, end_timestamp: "11" }],
       }),
       11,
     );
@@ -72,26 +215,74 @@ describe("createGranolaEventSource", () => {
     ]);
   });
 
-  it("can emit existing transcript entries for CLI/debug usage", () => {
+  it("recovers after an initial read/decrypt error", () => {
     const callbacks = createCallbacks();
     const deps = createFakeDependencies({
       initialCache: transcriptCache({
-        docA: [{ id: "utt1", text: "already here" }],
+        docA: [{ id: "utt1", text: "available after retry" }],
+      }),
+      initialMtime: 10,
+    });
+    deps.readCache.mockImplementationOnce(() => {
+      throw new Error("decrypt failed");
+    });
+    const source = createGranolaEventSource(baseArgs(), callbacks, deps);
+
+    source.start();
+    expect(callbacks.error).toHaveBeenCalledWith({
+      type: "watch_error",
+      message: "decrypt failed",
+    });
+
+    deps.tick();
+
+    expect(callbacks.started).toHaveBeenCalledOnce();
+    expect(callbacks.transcriptDiff).toHaveBeenCalledOnce();
+  });
+
+  it("reports a successful poll after a read/decrypt error even without transcript changes", () => {
+    const callbacks = createCallbacks();
+    const deps = createFakeDependencies({
+      initialCache: transcriptCache({
+        docA: [{ id: "utt1", text: "stable", end_timestamp: "10" }],
       }),
       initialMtime: 10,
     });
     const source = createGranolaEventSource(
-      { ...baseArgs(), emitExisting: true },
+      { ...baseArgs(), changesOnly: true },
       callbacks,
       deps,
     );
 
     source.start();
+    deps.readCache.mockImplementationOnce(() => {
+      throw new Error("decrypt failed");
+    });
+    deps.setCache(
+      transcriptCache({
+        docA: [{ id: "utt1", text: "stable", end_timestamp: "10" }],
+      }),
+      11,
+    );
+    deps.tick();
+    expect(callbacks.error).toHaveBeenCalledWith({
+      type: "watch_error",
+      message: "decrypt failed",
+    });
 
-    expect(callbacks.transcriptDiff).toHaveBeenCalledOnce();
-    expect(callbacks.transcriptDiff.mock.calls[0]?.[0].added).toMatchObject([
-      { key: "docA:utt1", documentId: "docA", utterance: { text: "already here" } },
-    ]);
+    deps.setCache(
+      transcriptCache({
+        docA: [{ id: "utt1", text: "stable", end_timestamp: "10" }],
+      }),
+      12,
+    );
+    deps.tick();
+
+    expect(callbacks.watching).toHaveBeenCalledWith({
+      type: "watching",
+      activeDocumentId: "docA",
+    });
+    expect(callbacks.transcriptDiff).not.toHaveBeenCalled();
   });
 
   it("stops polling cleanly", () => {
@@ -136,6 +327,7 @@ function createCallbacks() {
     started: vi.fn(),
     transcriptDiff: vi.fn(),
     error: vi.fn(),
+    watching: vi.fn(),
   } satisfies Required<GranolaEventSourceCallbacks>;
 }
 
@@ -199,7 +391,7 @@ function baseArgs(): WatchArgs {
   return {
     granolaDir: "/granola",
     intervalMs: 1000,
-    emitExisting: false,
+    changesOnly: false,
     json: false,
     summary: true,
     transcriptDocumentId: null,

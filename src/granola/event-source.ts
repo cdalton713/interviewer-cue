@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { readDek, readDecryptedCacheWithDek } from "./cache-reader.js";
-import { diffTranscriptState, type TranscriptStateDiff } from "./transcript-diff.js";
+import {
+  diffTranscriptState,
+  selectNewestTranscriptDocumentId,
+  type TranscriptStateDiff,
+} from "./transcript-diff.js";
 import type { GranolaCacheFile, GranolaTranscriptState, WatchArgs } from "./types.js";
 
 export interface NormalizedTranscriptDiff {
@@ -24,11 +28,13 @@ export interface GranolaWatchStartedEvent {
   granolaDir: string;
   intervalMs: number;
   transcriptDocuments: number;
+  activeDocumentId: string | null;
 }
 
 export interface GranolaTranscriptDiffEvent extends NormalizedTranscriptDiff {
   type: "transcript_diff";
   observedAt: string;
+  activeDocumentId: string;
 }
 
 export interface GranolaWatchErrorEvent {
@@ -36,10 +42,16 @@ export interface GranolaWatchErrorEvent {
   message: string;
 }
 
+export interface GranolaWatchingEvent {
+  type: "watching";
+  activeDocumentId: string | null;
+}
+
 export interface GranolaEventSourceCallbacks {
   started?: (event: GranolaWatchStartedEvent) => void;
   transcriptDiff?: (event: GranolaTranscriptDiffEvent) => void;
   error?: (event: GranolaWatchErrorEvent) => void;
+  watching?: (event: GranolaWatchingEvent) => void;
 }
 
 export interface GranolaEventSource {
@@ -75,32 +87,39 @@ export function createGranolaEventSource(
 
   let dek: Buffer | null = null;
   let previousTranscripts: GranolaTranscriptState = {};
+  let activeDocumentId: string | null = null;
   let lastMtime = 0;
   let intervalId: unknown;
   let running = false;
+  let initialized = false;
 
   function initialize() {
-    dek = deps.readDek(args);
-    const initialCache = deps.readCache(args.granolaDir, dek);
+    const nextDek = deps.readDek(args);
+    const initialCache = deps.readCache(args.granolaDir, nextDek);
     const initialTranscripts = readTranscripts(initialCache);
-    previousTranscripts = args.emitExisting ? {} : initialTranscripts;
-    lastMtime = deps.getCacheMtimeMs(args.granolaDir);
+    const nextActiveDocumentId = selectActiveDocumentId(initialTranscripts);
+    const nextMtime = deps.getCacheMtimeMs(args.granolaDir);
+
+    dek = nextDek;
+    activeDocumentId = nextActiveDocumentId;
+    previousTranscripts = args.changesOnly ? initialTranscripts : {};
+    lastMtime = nextMtime;
+    initialized = true;
 
     callbacks.started?.({
       type: "watch_started",
       granolaDir: args.granolaDir,
       intervalMs: args.intervalMs,
       transcriptDocuments: Object.keys(initialTranscripts).length,
+      activeDocumentId,
     });
 
-    if (args.emitExisting) {
-      emitDiff(previousTranscripts, initialTranscripts);
-      previousTranscripts = initialTranscripts;
-    }
+    emitActiveDiff(previousTranscripts, initialTranscripts);
+    previousTranscripts = initialTranscripts;
   }
 
   function poll() {
-    if (!dek) {
+    if (!initialized || !dek) {
       initialize();
       return;
     }
@@ -111,22 +130,39 @@ export function createGranolaEventSource(
     const cache = deps.readCache(args.granolaDir, dek);
     const nextTranscripts = readTranscripts(cache);
     lastMtime = nextMtime;
-    emitDiff(previousTranscripts, nextTranscripts);
+    activeDocumentId = selectActiveDocumentId(nextTranscripts);
+    emitActiveDiff(previousTranscripts, nextTranscripts);
     previousTranscripts = nextTranscripts;
+    callbacks.watching?.({
+      type: "watching",
+      activeDocumentId,
+    });
   }
 
-  function emitDiff(
+  function emitActiveDiff(
     previous: GranolaTranscriptState,
     next: GranolaTranscriptState,
   ) {
-    const diff = diffTranscriptState(previous, next);
+    if (!activeDocumentId) return;
+
+    const diff = diffTranscriptState(
+      selectDocumentTranscripts(previous, activeDocumentId),
+      selectDocumentTranscripts(next, activeDocumentId),
+    );
     if (diff.added.length === 0 && diff.updated.length === 0) return;
 
     callbacks.transcriptDiff?.({
       type: "transcript_diff",
       observedAt: deps.now().toISOString(),
+      activeDocumentId,
       ...normalizeDiff(diff),
     });
+  }
+
+  function selectActiveDocumentId(
+    transcripts: GranolaTranscriptState,
+  ): string | null {
+    return args.transcriptDocumentId ?? selectNewestTranscriptDocumentId(transcripts);
   }
 
   function pollSafely() {
@@ -151,6 +187,8 @@ export function createGranolaEventSource(
       if (!running) return;
       running = false;
       dek = null;
+      initialized = false;
+      activeDocumentId = null;
       if (intervalId !== undefined) {
         deps.clearInterval(intervalId);
         intervalId = undefined;
@@ -181,4 +219,11 @@ export function normalizeDiff(diff: TranscriptStateDiff): NormalizedTranscriptDi
 
 function readTranscripts(cache: GranolaCacheFile): GranolaTranscriptState {
   return cache.cache?.state?.transcripts ?? {};
+}
+
+function selectDocumentTranscripts(
+  transcripts: GranolaTranscriptState,
+  documentId: string,
+): GranolaTranscriptState {
+  return { [documentId]: transcripts[documentId] ?? [] };
 }

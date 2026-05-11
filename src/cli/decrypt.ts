@@ -5,6 +5,7 @@ import path from "node:path";
 import { parseDecryptArgs, printHelp, summarizeCache } from "../granola/cache-cli.js";
 import { readDecryptedCache } from "../granola/cache-reader.js";
 import { normalizeScriptArgv } from "./argv.js";
+import { isMain } from "./is-main.js";
 
 const DEFAULT_GRANOLA_DIR = path.join(
   os.homedir(),
@@ -35,9 +36,11 @@ export function main(argv = process.argv.slice(2)): void {
   console.log(JSON.stringify(summarizeCache(cacheFile), null, 2));
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(error instanceof Error ? error.message : error);
-  process.exitCode = 1;
+if (isMain(import.meta.url, process.argv, "decrypt")) {
+  try {
+    main();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  }
 }

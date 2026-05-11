@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   diffTranscriptState,
   flattenTranscripts,
+  selectNewestTranscriptDocumentId,
 } from "../src/granola/transcript-diff.js";
 
 describe("flattenTranscripts", () => {
@@ -18,6 +19,37 @@ describe("flattenTranscripts", () => {
         utterance: { id: "utt1", text: "hello" },
       },
     ]);
+  });
+});
+
+describe("selectNewestTranscriptDocumentId", () => {
+  it("selects the document with the newest utterance timestamp", () => {
+    expect(
+      selectNewestTranscriptDocumentId({
+        docA: [{ id: "utt1", text: "older", end_timestamp: "10" }],
+        docB: [{ id: "utt2", text: "newer", end_timestamp: "20" }],
+      }),
+    ).toBe("docB");
+  });
+
+  it("falls back from end timestamp to start timestamp and stored order", () => {
+    expect(
+      selectNewestTranscriptDocumentId({
+        docA: [{ id: "utt1", text: "no timestamp" }],
+        docB: [{ id: "utt2", text: "has start", start_timestamp: "10" }],
+      }),
+    ).toBe("docB");
+
+    expect(
+      selectNewestTranscriptDocumentId({
+        docA: [{ id: "utt1", text: "first" }],
+        docB: [{ id: "utt2", text: "second" }],
+      }),
+    ).toBe("docB");
+  });
+
+  it("returns null when no transcript document has utterances", () => {
+    expect(selectNewestTranscriptDocumentId({ docA: [] })).toBeNull();
   });
 });
 

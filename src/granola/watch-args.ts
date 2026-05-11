@@ -30,6 +30,7 @@ export function parseWatchArgs(
 
   const options = program.opts<{
     intervalMs: number;
+    changesOnly?: boolean;
     emitExisting?: boolean;
   }>();
   const passthrough = stripWatchArgs(argv);
@@ -37,7 +38,7 @@ export function parseWatchArgs(
   return {
     ...parseDecryptArgs(passthrough, defaultGranolaDir),
     intervalMs: options.intervalMs,
-    emitExisting: options.emitExisting === true,
+    changesOnly: options.changesOnly === true,
   };
 }
 
@@ -50,7 +51,7 @@ function parseIntervalMs(value: string): number {
 }
 
 function createWatchCommand(): Command {
-  return new Command("granola-watch-cache")
+  return new Command("interviewer-cue granola watch-cache")
     .exitOverride()
     .configureOutput({
       writeErr: () => {},
@@ -60,7 +61,12 @@ function createWatchCommand(): Command {
     .allowUnknownOption(true)
     .allowExcessArguments(true)
     .option("--interval-ms <ms>", "Poll interval in milliseconds", parseIntervalMs, 2000)
-    .option("--emit-existing", "Emit existing transcript entries on startup", false);
+    .option("--changes-only", "Emit only transcript changes observed after startup", false)
+    .option(
+      "--emit-existing",
+      "Deprecated alias for the default preload behavior",
+      false,
+    );
 }
 
 function stripWatchArgs(argv: string[]): string[] {
@@ -75,6 +81,9 @@ function stripWatchArgs(argv: string[]): string[] {
       continue;
     }
     if (arg === "--emit-existing") {
+      continue;
+    }
+    if (arg === "--changes-only") {
       continue;
     }
     if (arg !== undefined) {

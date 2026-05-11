@@ -114,7 +114,7 @@ export function summarizeCache(cacheFile: GranolaCacheFile): CacheSummary {
 }
 
 function createDecryptCommand(defaultGranolaDir: string): Command {
-  return new Command("granola-decrypt-cache")
+  return new Command("interviewer-cue granola decrypt-cache")
     .exitOverride()
     .configureOutput({
       writeErr: () => {},
