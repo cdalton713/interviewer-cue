@@ -1,6 +1,6 @@
 {
   "name": "interviewer-cue",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Terminal interview cue assistant with Granola transcript integration.",
   "license": "MIT",
   "author": "Christian Dalton",
@@ -35,11 +35,11 @@
     "typecheck": "tsc --noEmit",
     "build": "tsup",
     "pack:dry-run": "npm pack --dry-run",
-    "release:dry-run": "node scripts/release.mjs --dry-run --push",
-    "release": "node scripts/release.mjs",
-    "release:patch": "node scripts/release.mjs patch --push",
-    "release:minor": "node scripts/release.mjs minor --push",
-    "release:major": "node scripts/release.mjs major --push"
+    "release:dry-run": "node scripts/release.mjs --dry-run --publish",
+    "release": "node scripts/release.mjs --publish",
+    "release:patch": "node scripts/release.mjs patch --publish",
+    "release:minor": "node scripts/release.mjs minor --publish",
+    "release:major": "node scripts/release.mjs major --publish"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.76",

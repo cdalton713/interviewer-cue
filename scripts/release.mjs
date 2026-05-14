@@ -10,6 +10,7 @@ export function parseReleaseArgs(argv) {
   const options = {
     bump: "patch",
     dryRun: false,
+    publish: false,
     push: false,
     skipVerify: false,
   };
@@ -18,6 +19,10 @@ export function parseReleaseArgs(argv) {
   for (const arg of argv) {
     if (arg === "--dry-run") {
       options.dryRun = true;
+      continue;
+    }
+    if (arg === "--publish") {
+      options.publish = true;
       continue;
     }
     if (arg === "--push") {
@@ -70,6 +75,10 @@ export function buildReleasePlan(options) {
     { label: "Create annotated tag" },
   );
 
+  if (options.publish) {
+    steps.push({ label: "Publish to npm", command: ["npm", "publish"] });
+  }
+
   if (options.push) {
     steps.push({ label: "Push branch" }, { label: "Push tag" });
   }
@@ -111,12 +120,18 @@ function runRelease(options) {
   run("Commit release", "git", ["commit", "-m", `chore: release ${tag}`]);
   run("Create annotated tag", "git", ["tag", "-a", tag, "-m", tag]);
 
+  if (options.publish) {
+    run("Publish to npm", "npm", ["publish"]);
+  }
+
   if (options.push) {
     run("Push branch", "git", ["push", "origin", "HEAD"]);
     run("Push tag", "git", ["push", "origin", tag]);
-    console.log(`${tag} pushed. GitHub Actions will publish the package after CI passes.`);
+    const publishMessage = options.publish ? "published to npm" : "created locally";
+    console.log(`${tag} ${publishMessage} and pushed to GitHub.`);
   } else {
-    console.log(`${tag} created locally. Push with: git push origin HEAD && git push origin ${tag}`);
+    const publishMessage = options.publish ? "published to npm" : "created locally";
+    console.log(`${tag} ${publishMessage}. Push with: git push origin HEAD && git push origin ${tag}`);
   }
 }
 

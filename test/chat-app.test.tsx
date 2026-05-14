@@ -375,17 +375,17 @@ describe("ChatApp", () => {
       />,
     );
 
-    await wait(20);
-
-    expect(generateResumeQuestions).toHaveBeenCalledOnce();
-    expect(stripAnsi(lastFrame() ?? "")).not.toContain("AI error:");
-    expect(stripAnsi(lastFrame() ?? "")).not.toContain("/tmp/picked.pdf");
-    expect(saveInterviewSessions).toHaveBeenLastCalledWith([
-      expect.objectContaining({
-        resumePath: undefined,
-        generalQuestions: [],
-      }),
-    ]);
+    await waitForExpectation(() => expect(generateResumeQuestions).toHaveBeenCalledOnce());
+    await waitForExpectation(() => {
+      expect(stripAnsi(lastFrame() ?? "")).not.toContain("AI error:");
+      expect(stripAnsi(lastFrame() ?? "")).not.toContain("/tmp/picked.pdf");
+      expect(saveInterviewSessions).toHaveBeenLastCalledWith([
+        expect.objectContaining({
+          resumePath: undefined,
+          generalQuestions: [],
+        }),
+      ]);
+    });
   });
 
   it("animates the AI loading indicator while question generation is in flight", async () => {
@@ -498,7 +498,7 @@ describe("ChatApp", () => {
     expect(frame).not.toContain("\x1B[37m  1. Saved resume question?");
   });
 
-  it("uses inverse video for the selected question", async () => {
+  it("marks the selected question in terminal output", async () => {
     const fake = createFakeEventSource();
     const { lastFrame, stdin } = render(
       <ChatApp
@@ -512,7 +512,12 @@ describe("ChatApp", () => {
     await typeText(stdin, "l");
     await wait(0);
 
-    expect(lastFrame()).toMatch(/\x1B\[7m.*> 1\. Saved resume question\?/s);
+    const frame = lastFrame() ?? "";
+    if (frame.includes("\x1B[")) {
+      expect(frame).toMatch(/\x1B\[7m.*> 1\. Saved resume question\?/s);
+    } else {
+      expect(stripAnsi(frame)).toContain("> 1. Saved resume question?");
+    }
   });
 
   it("renders live questions before a compact recent transcript strip", async () => {

@@ -12,17 +12,19 @@ describe("release script", () => {
     expect(args).toEqual({
       bump: "patch",
       dryRun: false,
+      publish: false,
       push: false,
       skipVerify: false,
     });
   });
 
   it("accepts semver bumps, exact versions, and flags", () => {
-    const args = parseReleaseArgs(["minor", "--dry-run", "--push", "--skip-verify"]);
+    const args = parseReleaseArgs(["minor", "--dry-run", "--publish", "--push", "--skip-verify"]);
 
     expect(args).toEqual({
       bump: "minor",
       dryRun: true,
+      publish: true,
       push: true,
       skipVerify: true,
     });
@@ -40,10 +42,11 @@ describe("release script", () => {
     expect(() => parseReleaseArgs(["--unknown"])).toThrow("Unknown option: --unknown");
   });
 
-  it("builds the checked command plan for a pushed release", () => {
+  it("builds the checked command plan for a locally published release", () => {
     const plan = buildReleasePlan({
       bump: "patch",
       dryRun: false,
+      publish: true,
       push: true,
       skipVerify: false,
     });
@@ -59,6 +62,7 @@ describe("release script", () => {
       "Stage release files",
       "Commit release",
       "Create annotated tag",
+      "Publish to npm",
       "Push branch",
       "Push tag",
     ]);
@@ -68,6 +72,7 @@ describe("release script", () => {
     const plan = buildReleasePlan({
       bump: "major",
       dryRun: true,
+      publish: true,
       push: true,
       skipVerify: true,
     });
@@ -79,6 +84,7 @@ describe("release script", () => {
       "Stage release files",
       "Commit release",
       "Create annotated tag",
+      "Publish to npm",
       "Push branch",
       "Push tag",
     ]);

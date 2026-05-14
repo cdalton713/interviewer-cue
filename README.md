@@ -106,12 +106,12 @@ If `XDG_CONFIG_HOME` is not set, Interviewer Cue uses `~/.config/interviewer-cue
 
 ## Release Checklist
 
-GitHub Actions publishes to npm when a `v*` tag is pushed. The release script bumps `package.json`, refreshes the lockfile, runs the release checks, commits the version bump, creates an annotated `vX.Y.Z` tag, and can push the branch and tag to GitHub.
+The release script publishes to npm from the local machine. It bumps `package.json`, refreshes the lockfile, runs the release checks, commits the version bump, creates an annotated `vX.Y.Z` tag, and runs `npm publish`.
 
 One-time setup:
 
-1. Add an npm automation token as the GitHub repository secret `NPM_TOKEN`.
-2. Confirm the repository has GitHub Actions enabled.
+1. Confirm the local npm account has publish access to `interviewer-cue`.
+2. Run `npm login` if the local machine is not already authenticated.
 
 Preview the release plan:
 
@@ -128,10 +128,16 @@ pnpm release:patch
 Use `pnpm release:minor` or `pnpm release:major` for larger bumps. For an exact version, run:
 
 ```bash
-pnpm release -- 1.2.3 --push
+pnpm release -- 1.2.3
 ```
 
-Before publishing a release tag, the script runs:
+To push the release commit and tag after publishing, pass `--push`:
+
+```bash
+pnpm release:patch -- --push
+```
+
+Before publishing to npm, the script runs:
 
 ```bash
 pnpm test
