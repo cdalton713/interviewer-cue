@@ -125,6 +125,12 @@ Cut and deploy a patch release:
 pnpm release:patch
 ```
 
+If npm requires a one-time password for publishing, pass the current authenticator code through to `npm publish`:
+
+```bash
+pnpm release:patch -- --otp 123456
+```
+
 Use `pnpm release:minor` or `pnpm release:major` for larger bumps. For an exact version, run:
 
 ```bash
@@ -147,3 +153,9 @@ pnpm pack:dry-run
 ```
 
 The dry-run pack output should include `dist`, `fixtures/simulation/technical-interview.md`, `README.md`, `LICENSE`, and `package.json`.
+
+If the release fails at `npm publish`, the version commit and annotated tag have already been created locally. Do not rerun the full release command for the same version; fix npm authentication, then publish from the existing release commit:
+
+```bash
+npm publish --otp 123456
+```

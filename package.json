@@ -1,6 +1,6 @@
 {
   "name": "interviewer-cue",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Terminal interview cue assistant with Granola transcript integration.",
   "license": "MIT",
   "author": "Christian Dalton",

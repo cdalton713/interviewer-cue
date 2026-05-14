@@ -1,6 +1,7 @@
 export interface ReleaseOptions {
   bump: "patch" | "minor" | "major" | `${number}.${number}.${number}`;
   dryRun: boolean;
+  otp?: string;
   publish: boolean;
   push: boolean;
   skipVerify: boolean;

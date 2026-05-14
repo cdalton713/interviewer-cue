@@ -12,6 +12,7 @@ describe("release script", () => {
     expect(args).toEqual({
       bump: "patch",
       dryRun: false,
+      otp: undefined,
       publish: false,
       push: false,
       skipVerify: false,
@@ -24,6 +25,7 @@ describe("release script", () => {
     expect(args).toEqual({
       bump: "minor",
       dryRun: true,
+      otp: undefined,
       publish: true,
       push: true,
       skipVerify: true,
@@ -40,6 +42,30 @@ describe("release script", () => {
       "Only one release bump/version may be provided",
     );
     expect(() => parseReleaseArgs(["--unknown"])).toThrow("Unknown option: --unknown");
+    expect(() => parseReleaseArgs(["--otp"])).toThrow("Missing value for --otp");
+    expect(() => parseReleaseArgs(["--otp", "--publish"])).toThrow("Missing value for --otp");
+  });
+
+  it("passes an npm one-time password to publish", () => {
+    const args = parseReleaseArgs(["patch", "--publish", "--otp", "123456"]);
+
+    expect(args).toEqual({
+      bump: "patch",
+      dryRun: false,
+      otp: "123456",
+      publish: true,
+      push: false,
+      skipVerify: false,
+    });
+
+    const plan = buildReleasePlan(args);
+
+    expect(plan.find((step) => step.label === "Publish to npm")?.command).toEqual([
+      "npm",
+      "publish",
+      "--otp",
+      "123456",
+    ]);
   });
 
   it("builds the checked command plan for a locally published release", () => {

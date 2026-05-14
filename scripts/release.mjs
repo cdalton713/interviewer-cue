@@ -10,13 +10,15 @@ export function parseReleaseArgs(argv) {
   const options = {
     bump: "patch",
     dryRun: false,
+    otp: undefined,
     publish: false,
     push: false,
     skipVerify: false,
   };
   const positional = [];
 
-  for (const arg of argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
     if (arg === "--dry-run") {
       options.dryRun = true;
       continue;
@@ -31,6 +33,23 @@ export function parseReleaseArgs(argv) {
     }
     if (arg === "--skip-verify") {
       options.skipVerify = true;
+      continue;
+    }
+    if (arg === "--otp") {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new Error("Missing value for --otp");
+      }
+      options.otp = value;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--otp=")) {
+      const value = arg.slice("--otp=".length);
+      if (!value) {
+        throw new Error("Missing value for --otp");
+      }
+      options.otp = value;
       continue;
     }
     if (arg.startsWith("--")) {
@@ -76,7 +95,8 @@ export function buildReleasePlan(options) {
   );
 
   if (options.publish) {
-    steps.push({ label: "Publish to npm", command: ["npm", "publish"] });
+    const publishCommand = options.otp ? ["npm", "publish", "--otp", options.otp] : ["npm", "publish"];
+    steps.push({ label: "Publish to npm", command: publishCommand });
   }
 
   if (options.push) {
@@ -121,7 +141,7 @@ function runRelease(options) {
   run("Create annotated tag", "git", ["tag", "-a", tag, "-m", tag]);
 
   if (options.publish) {
-    run("Publish to npm", "npm", ["publish"]);
+    run("Publish to npm", "npm", options.otp ? ["publish", "--otp", options.otp] : ["publish"]);
   }
 
   if (options.push) {
