@@ -96,13 +96,23 @@ $XDG_CONFIG_HOME/interviewer-cue/interview-types.json
 $XDG_CONFIG_HOME/interviewer-cue/interview-sessions.json
 ```
 
-If `XDG_CONFIG_HOME` is not set, Interviewer Cue uses `~/.config/interviewer-cue`.
+If `XDG_CONFIG_HOME` is not set, Interviewer Cue uses `~/.config/interviewer-cue`
+for settings.
+
+Runtime logs are append-only JSONL entries saved in this repository under `logs/`.
+Entries with an interview `sessionId` are written to
+`logs/interviews/<session-id>.log.jsonl`; non-session entries use
+`logs/interviewer-cue.log.jsonl`. Logs include transcript watch lifecycle,
+live-generation scheduling, AI API call start/success/failure, status, model,
+duration, request id, and count metadata. They intentionally omit raw API keys,
+prompts, resume text, and transcript text.
 
 ## Troubleshooting
 
 - If launch hangs before the UI appears, run with `--no-update-check` and try `interviewer-cue update` separately.
 - If Granola transcripts are missing, run `interviewer-cue granola decrypt-cache --summary` to confirm the local cache can be read.
 - If model calls fail, open the app settings and confirm the relevant provider API key is configured.
+- If the app stalls midway through an interview, inspect that interview's file under `logs/interviews/` and follow a shared `requestId` across `live_generation.*` and `ai.api_call.*` events.
 
 ## Release Checklist
 

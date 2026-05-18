@@ -10,7 +10,12 @@ import { createDefaultAppWatchArgs } from "./cli/app-watch-args.js";
 import { isMain } from "./cli/is-main.js";
 import { normalizeScriptArgv } from "./cli/argv.js";
 import { installTerminalLifecycle } from "./cli/terminal-lifecycle.js";
+import {
+  generateLiveQuestions,
+  generateResumeQuestions,
+} from "./ai/questions.js";
 import { createGranolaEventSource } from "./granola/event-source.js";
+import { createFileAppLogger } from "./logging/app-log.js";
 import { createSimulationClientEventSource } from "./simulation/client-event-source.js";
 import { ChatApp } from "./ui/ChatApp.js";
 
@@ -29,6 +34,7 @@ export function runApp(argv = process.argv.slice(2)): void {
   }
 
   installTerminalLifecycle();
+  const logger = createFileAppLogger();
 
   render(
     <ChatApp
@@ -37,6 +43,11 @@ export function runApp(argv = process.argv.slice(2)): void {
       liveModelId={appArgs.liveModelId}
       resumePath={appArgs.resumePath}
       initialInterviewTypeId={appArgs.interviewTypeId}
+      logger={logger}
+      generateResumeQuestions={(input) =>
+        generateResumeQuestions(input, { logger })
+      }
+      generateLiveQuestions={(input) => generateLiveQuestions(input, { logger })}
       createEventSource={(callbacks) =>
         appArgs.transcriptSource === "simulation"
           ? createSimulationClientEventSource(appArgs.simulationUrl, callbacks)

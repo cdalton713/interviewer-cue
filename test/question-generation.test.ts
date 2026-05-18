@@ -65,6 +65,7 @@ type MockGenerateTextResult = {
 const generateTextMock = vi.mocked(generateText) as unknown as {
   mockReset: () => void;
   mockResolvedValue: (result: MockGenerateTextResult) => void;
+  mockRejectedValue: (error: unknown) => void;
   mock: { calls: Array<[MockGenerateTextOptions]> };
 };
 
@@ -298,5 +299,103 @@ describe("question generation", () => {
     expect(responseFormat.name).toBe("live_interview_questions");
     expect(questionItemSchema.required).toEqual(["question", "rationale", "focus"]);
     expect(questions).toEqual([{ question: "What tradeoff did the queue introduce?" }]);
+  });
+
+  it("logs live AI provider call start and success with duration metadata", async () => {
+    const logger = { log: vi.fn() };
+    generateTextMock.mockResolvedValue({
+      output: {
+        questions: [
+          {
+            question: "What tradeoff did the queue introduce?",
+            rationale: null,
+            focus: null,
+          },
+        ],
+      },
+    });
+
+    await generateLiveQuestions(
+      {
+        apiKeys,
+        modelId: "google:gemini-2.5-flash",
+        interviewType,
+        transcriptText: "We used a queue to smooth write bursts.",
+        requestId: "live-request-1",
+        sessionId: "session-1",
+      },
+      {
+        logger,
+        performanceNow: vi.fn().mockReturnValueOnce(10).mockReturnValueOnce(42),
+      },
+    );
+
+    expect(logger.log).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        event: "ai.api_call.started",
+        requestId: "live-request-1",
+        sessionId: "session-1",
+        callType: "live_questions",
+        provider: "google",
+        model: "gemini-2.5-flash",
+        transcriptChars: 39,
+      }),
+    );
+    expect(logger.log).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        event: "ai.api_call.succeeded",
+        requestId: "live-request-1",
+        durationMs: 32,
+        questionCount: 1,
+      }),
+    );
+  });
+
+  it("logs AI provider call failures with duration and error metadata", async () => {
+    const logger = { log: vi.fn() };
+    generateTextMock.mockRejectedValue(new Error("provider timeout"));
+
+    await expect(
+      generateResumeQuestions(
+        {
+          apiKeys,
+          modelId: "openai:gpt-5",
+          interviewType,
+          resumePath: "/tmp/resume.pdf",
+          requestId: "resume-request-1",
+          sessionId: "session-1",
+        },
+        {
+          extractPdfText: async () => "Built a PostgreSQL queue worker.",
+          logger,
+          performanceNow: vi.fn().mockReturnValueOnce(100).mockReturnValueOnce(175),
+        },
+      ),
+    ).rejects.toThrow("provider timeout");
+
+    expect(logger.log).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        event: "ai.api_call.started",
+        requestId: "resume-request-1",
+        callType: "resume_questions",
+        provider: "openai",
+        model: "gpt-5",
+        resumeFileName: "resume.pdf",
+      }),
+    );
+    expect(logger.log).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        level: "error",
+        event: "ai.api_call.failed",
+        requestId: "resume-request-1",
+        durationMs: 75,
+        errorName: "Error",
+        errorMessage: "provider timeout",
+      }),
+    );
   });
 });

@@ -254,7 +254,7 @@ export function LiveInterviewView({
         <Text color={uiColor.muted}>lines {transcriptEvents.length}</Text>
       </Box>
       <Text color={uiColor.muted}>
-        keys ↑/↓ select · p pin · delete remove · g general · l live · a analyze with Granola · d dashboard
+        keys ↑/↓ select · p pin · delete remove · r regenerate · g general · l live · a analyze with Granola · d dashboard
       </Text>
     </Box>
   );

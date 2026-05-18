@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { promisify } from "node:util";
 
 import { generateText, Output } from "ai";
@@ -9,9 +10,11 @@ import { z } from "zod";
 import type { InterviewType } from "../interview/interview-types.js";
 import {
   assertModelHasCredentials,
+  parseModelId,
   resolveLanguageModel,
   type ApiKeySettings,
 } from "./provider-registry.js";
+import { createNoopAppLogger, type AppLogger } from "../logging/app-log.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -46,6 +49,8 @@ type GeneratedInterviewQuestionsResult = z.infer<
 export interface QuestionGenerationDependencies {
   readFile?: (filePath: string) => Promise<Buffer>;
   extractPdfText?: (filePath: string) => Promise<string | null>;
+  logger?: AppLogger;
+  performanceNow?: () => number;
 }
 
 export async function generateResumeQuestions(
@@ -54,11 +59,16 @@ export async function generateResumeQuestions(
     modelId: string;
     interviewType: InterviewType;
     resumePath: string;
+    requestId?: string;
+    sessionId?: string;
   },
   dependencies: QuestionGenerationDependencies = {},
 ): Promise<InterviewQuestion[]> {
   const readFile = dependencies.readFile ?? fs.readFile;
   const extractPdfText = dependencies.extractPdfText ?? extractPdfTextWithPdftotext;
+  const logger = dependencies.logger ?? createNoopAppLogger();
+  const performanceNow = dependencies.performanceNow ?? (() => performance.now());
+  const requestId = input.requestId ?? createAiRequestId("resume");
   const resumeText = await extractPdfText(input.resumePath);
   const content: Array<
     | { type: "text"; text: string }
@@ -90,18 +100,65 @@ export async function generateResumeQuestions(
 
   assertModelHasCredentials(input.modelId, input.apiKeys);
 
-  const result = await generateText({
-    model: resolveLanguageModel(input.modelId, input.apiKeys),
-    output: createQuestionsOutput("interview_questions"),
-    messages: [
-      {
-        role: "user",
-        content,
-      },
-    ],
+  const { provider, model } = parseModelId(input.modelId);
+  const startedAt = performanceNow();
+  logger.log({
+    event: "ai.api_call.started",
+    requestId,
+    sessionId: input.sessionId,
+    callType: "resume_questions",
+    provider,
+    model,
+    modelId: input.modelId,
+    interviewTypeId: input.interviewType.id,
+    interviewTypeName: input.interviewType.name,
+    resumeFileName: path.basename(input.resumePath),
+    resumeTextChars: resumeText?.length ?? 0,
+    sentFilePart: !resumeText,
   });
 
-  return normalizeGeneratedQuestions(result.output.questions);
+  let result: Awaited<ReturnType<typeof generateText>>;
+  try {
+    result = await generateText({
+      model: resolveLanguageModel(input.modelId, input.apiKeys),
+      output: createQuestionsOutput("interview_questions"),
+      messages: [
+        {
+          role: "user",
+          content,
+        },
+      ],
+    });
+  } catch (error) {
+    logger.log({
+      level: "error",
+      event: "ai.api_call.failed",
+      requestId,
+      sessionId: input.sessionId,
+      callType: "resume_questions",
+      provider,
+      model,
+      modelId: input.modelId,
+      durationMs: Math.round(performanceNow() - startedAt),
+      ...formatErrorForLog(error),
+    });
+    throw error;
+  }
+
+  const questions = normalizeGeneratedQuestions(result.output.questions);
+  logger.log({
+    event: "ai.api_call.succeeded",
+    requestId,
+    sessionId: input.sessionId,
+    callType: "resume_questions",
+    provider,
+    model,
+    modelId: input.modelId,
+    durationMs: Math.round(performanceNow() - startedAt),
+    questionCount: questions.length,
+  });
+
+  return questions;
 }
 
 export async function generateLiveQuestions(
@@ -111,32 +168,83 @@ export async function generateLiveQuestions(
     interviewType: InterviewType;
     transcriptText: string;
     pinnedQuestions?: InterviewQuestion[];
+    requestId?: string;
+    sessionId?: string;
   },
   dependencies: QuestionGenerationDependencies = {},
 ): Promise<InterviewQuestion[]> {
+  const logger = dependencies.logger ?? createNoopAppLogger();
+  const performanceNow = dependencies.performanceNow ?? (() => performance.now());
+  const requestId = input.requestId ?? createAiRequestId("live");
   assertModelHasCredentials(input.modelId, input.apiKeys);
 
-  const result = await generateText({
-    model: resolveLanguageModel(input.modelId, input.apiKeys),
-    output: createQuestionsOutput("live_interview_questions"),
-    messages: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: buildLiveQuestionPrompt(
-              input.interviewType,
-              input.transcriptText,
-              input.pinnedQuestions,
-            ),
-          },
-        ],
-      },
-    ],
+  const { provider, model } = parseModelId(input.modelId);
+  const startedAt = performanceNow();
+  logger.log({
+    event: "ai.api_call.started",
+    requestId,
+    sessionId: input.sessionId,
+    callType: "live_questions",
+    provider,
+    model,
+    modelId: input.modelId,
+    interviewTypeId: input.interviewType.id,
+    interviewTypeName: input.interviewType.name,
+    transcriptChars: input.transcriptText.length,
+    pinnedQuestionCount: input.pinnedQuestions?.length ?? 0,
   });
 
-  return normalizeGeneratedQuestions(result.output.questions);
+  let result: Awaited<ReturnType<typeof generateText>>;
+  try {
+    result = await generateText({
+      model: resolveLanguageModel(input.modelId, input.apiKeys),
+      output: createQuestionsOutput("live_interview_questions"),
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: buildLiveQuestionPrompt(
+                input.interviewType,
+                input.transcriptText,
+                input.pinnedQuestions,
+              ),
+            },
+          ],
+        },
+      ],
+    });
+  } catch (error) {
+    logger.log({
+      level: "error",
+      event: "ai.api_call.failed",
+      requestId,
+      sessionId: input.sessionId,
+      callType: "live_questions",
+      provider,
+      model,
+      modelId: input.modelId,
+      durationMs: Math.round(performanceNow() - startedAt),
+      ...formatErrorForLog(error),
+    });
+    throw error;
+  }
+
+  const questions = normalizeGeneratedQuestions(result.output.questions);
+  logger.log({
+    event: "ai.api_call.succeeded",
+    requestId,
+    sessionId: input.sessionId,
+    callType: "live_questions",
+    provider,
+    model,
+    modelId: input.modelId,
+    durationMs: Math.round(performanceNow() - startedAt),
+    questionCount: questions.length,
+  });
+
+  return questions;
 }
 
 export function buildResumeQuestionPrompt(
@@ -233,4 +341,22 @@ async function extractPdfTextWithPdftotext(filePath: string): Promise<string | n
   } catch {
     return null;
   }
+}
+
+function createAiRequestId(prefix: string): string {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function formatErrorForLog(error: unknown) {
+  if (error instanceof Error) {
+    return {
+      errorName: error.name,
+      errorMessage: error.message,
+    };
+  }
+
+  return {
+    errorName: "NonError",
+    errorMessage: String(error),
+  };
 }

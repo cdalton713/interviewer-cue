@@ -30,6 +30,10 @@ import {
   type ApiKeySettings,
   type AppSettings,
 } from "../config/app-settings.js";
+import {
+  createNoopAppLogger,
+  type AppLogger,
+} from "../logging/app-log.js";
 import type {
   GranolaEventSource,
   GranolaEventSourceCallbacks,
@@ -99,6 +103,7 @@ import {
 
 const NO_INTERVIEW_TEMPLATES_MESSAGE =
   "No interview templates yet. Create one in Settings first.";
+const noopAppLogger = createNoopAppLogger();
 
 interface ChatAppProps {
   createEventSource: (callbacks: GranolaEventSourceCallbacks) => GranolaEventSource;
@@ -116,11 +121,14 @@ interface ChatAppProps {
   loadAppSettings?: () => Promise<AppSettings>;
   saveAppSettings?: (appSettings: AppSettings) => Promise<void>;
   copyTextToClipboard?: CopyTextToClipboard;
+  logger?: AppLogger;
   generateResumeQuestions?: (input: {
     apiKeys?: ApiKeySettings;
     modelId: string;
     interviewType: InterviewType;
     resumePath: string;
+    requestId?: string;
+    sessionId?: string;
   }) => Promise<InterviewQuestion[]>;
   generateLiveQuestions?: (input: {
     apiKeys?: ApiKeySettings;
@@ -128,6 +136,8 @@ interface ChatAppProps {
     interviewType: InterviewType;
     transcriptText: string;
     pinnedQuestions?: InterviewQuestion[];
+    requestId?: string;
+    sessionId?: string;
   }) => Promise<InterviewQuestion[]>;
   liveQuestionOptions?: {
     debounceMs?: number;
@@ -245,6 +255,7 @@ export function ChatApp({
   loadAppSettings = defaultLoadAppSettings,
   saveAppSettings = defaultSaveAppSettings,
   copyTextToClipboard = copyTextToTerminalClipboard,
+  logger = noopAppLogger,
   generateResumeQuestions = defaultGenerateResumeQuestions,
   generateLiveQuestions = defaultGenerateLiveQuestions,
   liveQuestionOptions = {},
@@ -295,8 +306,10 @@ export function ChatApp({
   const initializedFromArgsRef = useRef(false);
   const liveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const liveInFlightRef = useRef(false);
+  const pendingAutoLiveGenerationRef = useRef(false);
   const resumePickInFlightRef = useRef(false);
   const startAfterResumePickRef = useRef(false);
+  const aiRequestCounterRef = useRef(0);
   const lastLiveCallAtRef = useRef(0);
   const lastLiveTranscriptLengthRef = useRef(0);
   const debounceMs = liveQuestionOptions.debounceMs ?? 2000;
@@ -476,12 +489,31 @@ export function ChatApp({
 
     const source = createEventSource({
       started(event) {
+        logger.log({
+          event: "transcript.watch.started",
+          sessionId: activeSession.id,
+          granolaDir: event.granolaDir,
+          intervalMs: event.intervalMs,
+          transcriptDocuments: event.transcriptDocuments,
+          activeDocumentId: event.activeDocumentId,
+        });
         const nextEvents = mergeConsoleEvents(stateRef.current.events, [
           mapWatchStartedToConsoleEvent(event),
         ]);
         patchAppState({ status: "watching", events: nextEvents });
       },
       transcriptDiff(event) {
+        logger.log({
+          event: "transcript.diff.received",
+          sessionId: activeSession.id,
+          activeDocumentId: event.activeDocumentId,
+          observedAt: event.observedAt,
+          addedCount: event.added.length,
+          updatedCount: event.updated.length,
+          finalAddedCount: event.added.filter((entry) => entry.utterance.is_final).length,
+          finalUpdatedCount: event.updated.filter((entry) => entry.utterance.is_final)
+            .length,
+        });
         const nextEvents = mergeConsoleEvents(
           stateRef.current.events,
           mapTranscriptDiffToConsoleEvents(event),
@@ -490,6 +522,12 @@ export function ChatApp({
         persistActiveSession({ transcriptEvents: onlyTranscriptEvents(nextEvents) });
       },
       error(event) {
+        logger.log({
+          level: "error",
+          event: "transcript.watch.error",
+          sessionId: activeSession.id,
+          message: event.message,
+        });
         const nextEvents = mergeConsoleEvents(stateRef.current.events, [
           mapWatchErrorToConsoleEvent(event),
         ]);
@@ -502,32 +540,51 @@ export function ChatApp({
     });
 
     sourceRef.current = source;
+    logger.log({ event: "transcript.watch.starting", sessionId: activeSession.id });
     source.start();
     return () => {
+      logger.log({ event: "transcript.watch.stopping", sessionId: activeSession.id });
       source.stop();
       if (sourceRef.current === source) sourceRef.current = null;
     };
-  }, [activeSession?.id, createEventSource, mode]);
+  }, [activeSession?.id, createEventSource, logger, mode]);
 
   useEffect(() => {
     if (!settingsLoaded || mode !== "live" || !activeSession || !activeSession.resumePath) return;
     if (generalQuestions.length > 0) return;
 
     const activeResumePath = activeSession.resumePath;
+    const requestId = createAiRequestId("resume", aiRequestCounterRef);
+    const selectedModelId =
+      pdfModelId ??
+      modelId ??
+      stateRef.current.appSettings.selectedPdfModelId;
     let cancelled = false;
     patchAppState({ aiStatus: "loading" });
     setAiError(null);
+    logger.log({
+      event: "resume_generation.started",
+      requestId,
+      sessionId: activeSession.id,
+      modelId: selectedModelId,
+      resumeFileName: activeResumePath.split(/[\\/]/).at(-1) ?? activeResumePath,
+    });
     generateResumeQuestions({
       apiKeys: stateRef.current.appSettings.apiKeys,
-      modelId:
-        pdfModelId ??
-        modelId ??
-        stateRef.current.appSettings.selectedPdfModelId,
+      modelId: selectedModelId,
       interviewType: activeSession.templateSnapshot,
       resumePath: activeResumePath,
+      requestId,
+      sessionId: activeSession.id,
     })
       .then((questions) => {
         if (cancelled) return;
+        logger.log({
+          event: "resume_generation.succeeded",
+          requestId,
+          sessionId: activeSession.id,
+          questionCount: questions.length,
+        });
         patchAppState({ generalQuestions: questions });
         persistActiveSession({ generalQuestions: questions });
         patchAppState({ aiStatus: "idle" });
@@ -535,6 +592,14 @@ export function ChatApp({
       .catch((error) => {
         if (cancelled) return;
         if (isMissingFileError(error, activeResumePath)) {
+          logger.log({
+            level: "warn",
+            event: "resume_generation.skipped",
+            requestId,
+            sessionId: activeSession.id,
+            reason: "missing_resume_file",
+            resumeFileName: activeResumePath.split(/[\\/]/).at(-1) ?? activeResumePath,
+          });
           patchAppState({
             generalQuestions: [],
             selectedResumePath: "",
@@ -544,6 +609,13 @@ export function ChatApp({
           setAiError(null);
           return;
         }
+        logger.log({
+          level: "error",
+          event: "resume_generation.failed",
+          requestId,
+          sessionId: activeSession.id,
+          ...formatErrorForLog(error),
+        });
         patchAppState({ aiStatus: "error" });
         setAiError(error);
       });
@@ -561,64 +633,8 @@ export function ChatApp({
   ]);
 
   useEffect(() => {
-    if (!settingsLoaded || mode !== "live" || !activeSession) return;
-    if (
-      liveGenerationTranscriptText.length - lastLiveTranscriptLengthRef.current <
-      minNewTranscriptChars
-    ) {
-      return;
-    }
-    if (liveInFlightRef.current) return;
-
-    if (liveTimerRef.current) {
-      clearTimeout(liveTimerRef.current);
-    }
-
-    const delay = Math.max(
-      debounceMs,
-      minIntervalMs - (Date.now() - lastLiveCallAtRef.current),
-      0,
-    );
-    liveTimerRef.current = setTimeout(() => {
-      liveTimerRef.current = null;
-      if (liveInFlightRef.current || !stateRef.current.activeSessionId) return;
-      liveInFlightRef.current = true;
-      patchAppState({ aiStatus: "loading" });
-      setAiError(null);
-      const pinnedQuestions = [
-        ...stateRef.current.generalQuestions.filter((question) => question.pinned),
-        ...stateRef.current.liveQuestions.filter((question) => question.pinned),
-      ];
-      generateLiveQuestions({
-        apiKeys: stateRef.current.appSettings.apiKeys,
-        modelId:
-          liveModelId ??
-          modelId ??
-          stateRef.current.appSettings.selectedLiveModelId,
-        interviewType: activeSession.templateSnapshot,
-        transcriptText: liveGenerationPromptTranscriptText,
-        pinnedQuestions,
-      })
-        .then((questions) => {
-          const nextLiveQuestions = mergeLiveQuestionsWithPinned(
-            stateRef.current.liveQuestions,
-            questions,
-            pinnedQuestions,
-          );
-          patchAppState({ liveQuestions: nextLiveQuestions });
-          persistActiveSession({ liveQuestions: nextLiveQuestions });
-          lastLiveTranscriptLengthRef.current = liveGenerationTranscriptText.length;
-          lastLiveCallAtRef.current = Date.now();
-          patchAppState({ aiStatus: "idle" });
-        })
-        .catch((error) => {
-          patchAppState({ aiStatus: "error" });
-          setAiError(error);
-        })
-        .finally(() => {
-          liveInFlightRef.current = false;
-        });
-    }, delay);
+    if (!settingsLoaded || mode !== "live" || !activeSessionId) return;
+    scheduleAutoLiveQuestionGeneration();
 
     return () => {
       if (liveTimerRef.current) {
@@ -627,11 +643,12 @@ export function ChatApp({
       }
     };
   }, [
-    activeSession,
+    activeSessionId,
     debounceMs,
     generateLiveQuestions,
     liveGenerationPromptTranscriptText,
     liveGenerationTranscriptText,
+    logger,
     minIntervalMs,
     minNewTranscriptChars,
     mode,
@@ -856,6 +873,10 @@ export function ChatApp({
             (session) => session.id === stateRef.current.activeSessionId,
           ) ?? null;
         void copyAnalysisPrompt(sessionToAnalyze);
+        return;
+      }
+      if (input === "r") {
+        forceRegenerateLiveQuestions();
         return;
       }
       if (input === "g") patchAppState({ questionPanelMode: "general", selectedQuestionIndex: 0 });
@@ -1186,6 +1207,229 @@ export function ChatApp({
     }
   }
 
+  function forceRegenerateLiveQuestions() {
+    const context = getCurrentLiveGenerationContext();
+    if (!context) return;
+
+    if (liveTimerRef.current) {
+      clearTimeout(liveTimerRef.current);
+      liveTimerRef.current = null;
+    }
+
+    void runLiveQuestionGeneration({
+      sessionId: context.session.id,
+      transcriptText: context.transcriptText,
+      promptTranscriptText: context.promptTranscriptText,
+      trigger: "manual",
+    });
+  }
+
+  function getCurrentLiveGenerationContext() {
+    const currentActiveSessionId = stateRef.current.activeSessionId;
+    const currentActiveSession =
+      stateRef.current.sessions.find(
+        (session) => session.id === currentActiveSessionId,
+      ) ?? null;
+    if (!currentActiveSession) return null;
+
+    const currentTranscriptEvents = stateRef.current.events.filter(
+      (event): event is TranscriptConsoleEvent => event.type === "transcript",
+    );
+    const transcriptText = currentTranscriptEvents
+      .filter(isLiveGenerationTranscriptEvent)
+      .map((event) => event.text.trim())
+      .filter(Boolean)
+      .join("\n");
+
+    return {
+      session: currentActiveSession,
+      transcriptText,
+      promptTranscriptText: buildLiveGenerationPromptTranscriptText(
+        currentTranscriptEvents,
+      ),
+    };
+  }
+
+  function scheduleAutoLiveQuestionGeneration() {
+    const context = getCurrentLiveGenerationContext();
+    if (!context) return;
+
+    const newTranscriptChars =
+      context.transcriptText.length - lastLiveTranscriptLengthRef.current;
+    if (newTranscriptChars < minNewTranscriptChars) {
+      pendingAutoLiveGenerationRef.current = false;
+      return;
+    }
+
+    if (liveInFlightRef.current) {
+      pendingAutoLiveGenerationRef.current = true;
+      logger.log({
+        event: "live_generation.skipped",
+        sessionId: context.session.id,
+        reason: "request_in_flight",
+        transcriptChars: context.transcriptText.length,
+        lastGeneratedTranscriptChars: lastLiveTranscriptLengthRef.current,
+      });
+      return;
+    }
+
+    pendingAutoLiveGenerationRef.current = false;
+
+    if (liveTimerRef.current) {
+      clearTimeout(liveTimerRef.current);
+    }
+
+    const selectedModelId =
+      liveModelId ??
+      modelId ??
+      stateRef.current.appSettings.selectedLiveModelId;
+    const delay = Math.max(
+      debounceMs,
+      minIntervalMs - (Date.now() - lastLiveCallAtRef.current),
+      0,
+    );
+    logger.log({
+      event: "live_generation.scheduled",
+      sessionId: context.session.id,
+      modelId: selectedModelId,
+      delayMs: delay,
+      transcriptChars: context.transcriptText.length,
+      newTranscriptChars,
+      promptTranscriptChars: context.promptTranscriptText.length,
+    });
+    liveTimerRef.current = setTimeout(() => {
+      liveTimerRef.current = null;
+      const latestContext = getCurrentLiveGenerationContext();
+      if (!latestContext) return;
+      void runLiveQuestionGeneration({
+        sessionId: latestContext.session.id,
+        transcriptText: latestContext.transcriptText,
+        promptTranscriptText: latestContext.promptTranscriptText,
+        trigger: "auto",
+      });
+    }, delay);
+  }
+
+  async function runLiveQuestionGeneration({
+    sessionId,
+    transcriptText,
+    promptTranscriptText,
+    trigger,
+  }: {
+    sessionId: string;
+    transcriptText: string;
+    promptTranscriptText: string;
+    trigger: "auto" | "manual";
+  }) {
+    if (liveInFlightRef.current || !stateRef.current.activeSessionId) {
+      if (trigger === "auto") {
+        pendingAutoLiveGenerationRef.current = true;
+      }
+      logger.log({
+        event: "live_generation.skipped",
+        sessionId,
+        reason: "request_in_flight",
+        trigger,
+        transcriptChars: transcriptText.length,
+        lastGeneratedTranscriptChars: lastLiveTranscriptLengthRef.current,
+      });
+      return;
+    }
+
+    const session =
+      stateRef.current.sessions.find(
+        (candidate) => candidate.id === sessionId,
+      ) ?? null;
+    if (!session || stateRef.current.activeSessionId !== sessionId) return;
+
+    if (promptTranscriptText.trim().length === 0) {
+      logger.log({
+        event: "live_generation.skipped",
+        sessionId,
+        reason: "empty_transcript",
+        trigger,
+      });
+      patchAppState({ aiStatus: "error" });
+      setAiError("No transcript context available to regenerate live questions.");
+      return;
+    }
+
+    liveInFlightRef.current = true;
+    const requestId = createAiRequestId("live", aiRequestCounterRef);
+    const selectedModelId =
+      liveModelId ??
+      modelId ??
+      stateRef.current.appSettings.selectedLiveModelId;
+    patchAppState({ aiStatus: "loading" });
+    setAiError(null);
+    const pinnedQuestions = [
+      ...stateRef.current.generalQuestions.filter((question) => question.pinned),
+      ...stateRef.current.liveQuestions.filter((question) => question.pinned),
+    ];
+    logger.log({
+      event: "live_generation.started",
+      requestId,
+      sessionId,
+      modelId: selectedModelId,
+      trigger,
+      transcriptChars: transcriptText.length,
+      promptTranscriptChars: promptTranscriptText.length,
+      pinnedQuestionCount: pinnedQuestions.length,
+    });
+
+    try {
+      const questions = await generateLiveQuestions({
+        apiKeys: stateRef.current.appSettings.apiKeys,
+        modelId: selectedModelId,
+        interviewType: session.templateSnapshot,
+        transcriptText: promptTranscriptText,
+        pinnedQuestions,
+        requestId,
+        sessionId,
+      });
+      logger.log({
+        event: "live_generation.succeeded",
+        requestId,
+        sessionId,
+        questionCount: questions.length,
+      });
+      const nextLiveQuestions = mergeLiveQuestionsWithPinned(
+        stateRef.current.liveQuestions,
+        questions,
+        pinnedQuestions,
+      );
+      patchAppState({
+        liveQuestions: nextLiveQuestions,
+        questionPanelMode: "live",
+        selectedQuestionIndex: 0,
+      });
+      persistActiveSession({ liveQuestions: nextLiveQuestions });
+      lastLiveTranscriptLengthRef.current = transcriptText.length;
+      lastLiveCallAtRef.current = Date.now();
+      patchAppState({ aiStatus: "idle" });
+    } catch (error) {
+      logger.log({
+        level: "error",
+        event: "live_generation.failed",
+        requestId,
+        sessionId,
+        ...formatErrorForLog(error),
+      });
+      patchAppState({ aiStatus: "error" });
+      setAiError(error instanceof Error ? error : String(error));
+    } finally {
+      logger.log({
+        event: "live_generation.completed",
+        requestId,
+        sessionId,
+      });
+      liveInFlightRef.current = false;
+      if (pendingAutoLiveGenerationRef.current) {
+        scheduleAutoLiveQuestionGeneration();
+      }
+    }
+  }
+
   function toggleSelectedQuestionPin() {
     updateActiveQuestions((questions, selectedIndex) =>
       questions.map((question, index) =>
@@ -1475,4 +1719,26 @@ function mergeLiveQuestionsWithPinned(
 
 function normalizeQuestionText(question: string): string {
   return question.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function createAiRequestId(
+  prefix: "resume" | "live",
+  counterRef: React.MutableRefObject<number>,
+): string {
+  counterRef.current += 1;
+  return `${prefix}-${Date.now().toString(36)}-${counterRef.current}`;
+}
+
+function formatErrorForLog(error: unknown) {
+  if (error instanceof Error) {
+    return {
+      errorName: error.name,
+      errorMessage: error.message,
+    };
+  }
+
+  return {
+    errorName: "NonError",
+    errorMessage: String(error),
+  };
 }

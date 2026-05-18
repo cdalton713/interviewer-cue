@@ -3,6 +3,7 @@ import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "ink-testing-library";
 
+import type { InterviewQuestion } from "../src/ai/questions.js";
 import type {
   GranolaEventSource,
   GranolaEventSourceCallbacks,
@@ -320,17 +321,19 @@ describe("ChatApp", () => {
     await typeText(stdin, "nr\r");
     await wait(20);
 
-    expect(generateResumeQuestions).toHaveBeenCalledWith({
-      apiKeys: {
-        openaiApiKey: "openai-key",
-        googleGenerativeAiApiKey: "",
-        anthropicApiKey: "",
-        anthropicAuthToken: "",
-      },
-      modelId: "openai:gpt-5",
-      interviewType: technicalTemplate,
-      resumePath: "/tmp/picked.pdf",
-    });
+    expect(generateResumeQuestions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKeys: {
+          openaiApiKey: "openai-key",
+          googleGenerativeAiApiKey: "",
+          anthropicApiKey: "",
+          anthropicAuthToken: "",
+        },
+        modelId: "openai:gpt-5",
+        interviewType: technicalTemplate,
+        resumePath: "/tmp/picked.pdf",
+      }),
+    );
     expect(lastFrame()).toContain("general questions");
     expect(lastFrame()).toContain("What technical decision");
     expect(saveInterviewSessions).toHaveBeenLastCalledWith([
@@ -802,6 +805,378 @@ describe("ChatApp", () => {
         ],
       }),
     ]);
+  });
+
+  it("force regenerates live questions from the live interview screen", async () => {
+    const fake = createFakeEventSource();
+    const saveInterviewSessions = vi.fn().mockResolvedValue(undefined);
+    const generateLiveQuestions = vi.fn().mockResolvedValue([
+      {
+        question: "What new risk did the queue introduce?",
+      },
+    ]);
+    const sessionWithTranscript: InterviewSession = {
+      ...activeSession,
+      generalQuestions: [
+        { question: "Which resume project deserves a deeper dive?", pinned: true },
+      ],
+      liveQuestions: [
+        { question: "What failure mode worried you most?", pinned: true },
+      ],
+    };
+    const { lastFrame, stdin } = render(
+      <ChatApp
+        createEventSource={fake.createEventSource}
+        initialInterviewTypeId="technical"
+        loadAppSettings={async () => ({
+          apiKeys: {
+            openaiApiKey: "",
+            googleGenerativeAiApiKey: "google-key",
+            anthropicApiKey: "",
+            anthropicAuthToken: "",
+          },
+          selectedPdfModelId: "openai:gpt-5",
+          selectedLiveModelId: "google:gemini-2.5-flash",
+        })}
+        loadInterviewTypes={async () => [technicalTemplate]}
+        loadInterviewSessions={async () => [sessionWithTranscript]}
+        saveInterviewSessions={saveInterviewSessions}
+        generateLiveQuestions={generateLiveQuestions}
+        liveQuestionOptions={{
+          debounceMs: 1000,
+          minIntervalMs: 60000,
+          minNewTranscriptChars: 1000,
+        }}
+      />,
+    );
+
+    await waitForExpectation(() => expect(fake.start).toHaveBeenCalledOnce());
+    expect(generateLiveQuestions).not.toHaveBeenCalled();
+
+    await typeText(stdin, "r");
+
+    await waitForExpectation(() => expect(generateLiveQuestions).toHaveBeenCalledOnce());
+    expect(generateLiveQuestions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKeys: expect.objectContaining({
+          googleGenerativeAiApiKey: "google-key",
+        }),
+        modelId: "google:gemini-2.5-flash",
+        interviewType: technicalTemplate,
+        transcriptText: "Existing words.",
+        pinnedQuestions: [
+          expect.objectContaining({
+            question: "Which resume project deserves a deeper dive?",
+            pinned: true,
+          }),
+          expect.objectContaining({
+            question: "What failure mode worried you most?",
+            pinned: true,
+          }),
+        ],
+      }),
+    );
+    await waitForExpectation(() =>
+      expect(saveInterviewSessions).toHaveBeenLastCalledWith([
+        expect.objectContaining({
+          liveQuestions: [
+            expect.objectContaining({
+              question: "What failure mode worried you most?",
+              pinned: true,
+            }),
+            expect.objectContaining({
+              question: "What new risk did the queue introduce?",
+            }),
+          ],
+        }),
+      ]),
+    );
+    expect(stripAnsi(lastFrame() ?? "")).toContain("r regenerate");
+    expect(stripAnsi(lastFrame() ?? "")).toContain("What new risk did the queue");
+  });
+
+  it("logs transcript diffs and live question scheduling lifecycle", async () => {
+    vi.useFakeTimers();
+    const fake = createFakeEventSource();
+    const logger = { log: vi.fn() };
+    const generateLiveQuestions = vi.fn().mockResolvedValue([
+      {
+        question: "What changed operationally?",
+      },
+    ]);
+    render(
+      <ChatApp
+        createEventSource={fake.createEventSource}
+        initialInterviewTypeId="technical"
+        loadAppSettings={async () => ({
+          apiKeys: {
+            openaiApiKey: "",
+            googleGenerativeAiApiKey: "google-key",
+            anthropicApiKey: "",
+            anthropicAuthToken: "",
+          },
+          selectedPdfModelId: "openai:gpt-5",
+          selectedLiveModelId: "google:gemini-2.5-flash",
+        })}
+        loadInterviewTypes={async () => [technicalTemplate]}
+        loadInterviewSessions={async () => []}
+        saveInterviewSessions={vi.fn().mockResolvedValue(undefined)}
+        generateLiveQuestions={generateLiveQuestions}
+        logger={logger}
+        liveQuestionOptions={{
+          debounceMs: 10,
+          minIntervalMs: 0,
+          minNewTranscriptChars: 20,
+        }}
+      />,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    act(() => {
+      fake.callbacks.transcriptDiff?.({
+        type: "transcript_diff",
+        observedAt: "2026-05-11T12:00:00.000Z",
+        activeDocumentId: "docA",
+        added: [
+          {
+            key: "docA:utt1",
+            documentId: "docA",
+            utterance: {
+              id: "utt1",
+              text: "We introduced a durable queue to remove write bottlenecks.",
+              source: "candidate",
+              is_final: true,
+            },
+          },
+        ],
+        updated: [],
+      });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(15);
+      await Promise.resolve();
+    });
+
+    expect(logger.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "transcript.diff.received",
+        sessionId: expect.stringMatching(/^session-/),
+        addedCount: 1,
+        updatedCount: 0,
+        activeDocumentId: "docA",
+      }),
+    );
+    expect(logger.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "live_generation.scheduled",
+        modelId: "google:gemini-2.5-flash",
+        delayMs: 10,
+        transcriptChars: 58,
+        newTranscriptChars: 58,
+      }),
+    );
+    expect(logger.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "live_generation.started",
+        modelId: "google:gemini-2.5-flash",
+        requestId: expect.stringMatching(/^live-/),
+      }),
+    );
+    expect(logger.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "live_generation.succeeded",
+        questionCount: 1,
+      }),
+    );
+  });
+
+  it("logs one live question schedule for a single transcript diff", async () => {
+    vi.useFakeTimers();
+    const fake = createFakeEventSource();
+    const logger = { log: vi.fn() };
+    const generateLiveQuestions = vi.fn().mockResolvedValue([
+      {
+        question: "What changed operationally?",
+      },
+    ]);
+    render(
+      <ChatApp
+        createEventSource={fake.createEventSource}
+        initialInterviewTypeId="technical"
+        loadAppSettings={async () => ({
+          apiKeys: {
+            openaiApiKey: "",
+            googleGenerativeAiApiKey: "google-key",
+            anthropicApiKey: "",
+            anthropicAuthToken: "",
+          },
+          selectedPdfModelId: "openai:gpt-5",
+          selectedLiveModelId: "google:gemini-2.5-flash",
+        })}
+        loadInterviewTypes={async () => [technicalTemplate]}
+        loadInterviewSessions={async () => []}
+        saveInterviewSessions={vi.fn().mockResolvedValue(undefined)}
+        generateLiveQuestions={generateLiveQuestions}
+        logger={logger}
+        liveQuestionOptions={{
+          debounceMs: 10,
+          minIntervalMs: 0,
+          minNewTranscriptChars: 20,
+        }}
+      />,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    act(() => {
+      fake.callbacks.transcriptDiff?.({
+        type: "transcript_diff",
+        observedAt: "2026-05-11T12:00:00.000Z",
+        activeDocumentId: "docA",
+        added: [
+          {
+            key: "docA:utt1",
+            documentId: "docA",
+            utterance: {
+              id: "utt1",
+              text: "We introduced a durable queue to remove write bottlenecks.",
+              source: "candidate",
+              is_final: true,
+            },
+          },
+        ],
+        updated: [],
+      });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const scheduledLogs = logger.log.mock.calls.filter(
+      ([entry]) => entry.event === "live_generation.scheduled",
+    );
+    expect(scheduledLogs).toHaveLength(1);
+  });
+
+  it("queues transcript growth that arrives during live question generation", async () => {
+    vi.useFakeTimers();
+    const fake = createFakeEventSource();
+    const firstGeneration = createDeferred<InterviewQuestion[]>();
+    const generateLiveQuestions = vi
+      .fn()
+      .mockReturnValueOnce(firstGeneration.promise)
+      .mockResolvedValueOnce([
+        {
+          question: "What new evidence changed the design?",
+        },
+      ]);
+    render(
+      <ChatApp
+        createEventSource={fake.createEventSource}
+        initialInterviewTypeId="technical"
+        loadAppSettings={async () => ({
+          apiKeys: {
+            openaiApiKey: "",
+            googleGenerativeAiApiKey: "google-key",
+            anthropicApiKey: "",
+            anthropicAuthToken: "",
+          },
+          selectedPdfModelId: "openai:gpt-5",
+          selectedLiveModelId: "google:gemini-2.5-flash",
+        })}
+        loadInterviewTypes={async () => [technicalTemplate]}
+        loadInterviewSessions={async () => []}
+        saveInterviewSessions={vi.fn().mockResolvedValue(undefined)}
+        generateLiveQuestions={generateLiveQuestions}
+        liveQuestionOptions={{
+          debounceMs: 10,
+          minIntervalMs: 0,
+          minNewTranscriptChars: 20,
+        }}
+      />,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    act(() => {
+      fake.callbacks.transcriptDiff?.({
+        type: "transcript_diff",
+        observedAt: "2026-05-11T12:00:00.000Z",
+        activeDocumentId: "docA",
+        added: [
+          {
+            key: "docA:utt1",
+            documentId: "docA",
+            utterance: {
+              id: "utt1",
+              text: "We introduced a durable queue to remove write bottlenecks.",
+              source: "candidate",
+              is_final: true,
+            },
+          },
+        ],
+        updated: [],
+      });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(15);
+      await Promise.resolve();
+    });
+
+    expect(generateLiveQuestions).toHaveBeenCalledOnce();
+
+    act(() => {
+      fake.callbacks.transcriptDiff?.({
+        type: "transcript_diff",
+        observedAt: "2026-05-11T12:00:01.000Z",
+        activeDocumentId: "docA",
+        added: [
+          {
+            key: "docA:utt2",
+            documentId: "docA",
+            utterance: {
+              id: "utt2",
+              text: "The candidate then tied the queue to retry isolation.",
+              source: "candidate",
+              is_final: true,
+            },
+          },
+        ],
+        updated: [],
+      });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(generateLiveQuestions).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      firstGeneration.resolve([
+        {
+          question: "What changed operationally?",
+        },
+      ]);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(15);
+      await Promise.resolve();
+    });
+
+    expect(generateLiveQuestions).toHaveBeenCalledTimes(2);
+    expect(generateLiveQuestions.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        transcriptText:
+          "We introduced a durable queue to remove write bottlenecks.\n" +
+          "The candidate then tied the queue to retry isolation.",
+      }),
+    );
   });
 
   it("excludes microphone utterances from live question generation", async () => {
@@ -1851,6 +2226,17 @@ async function waitForExpectation(assertion: () => void, timeoutMs = 1000) {
   }
 
   throw lastError;
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+
+  return { promise, resolve, reject };
 }
 
 function stripAnsi(value: string): string {
