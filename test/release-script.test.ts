@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildReleasePlan,
   parseReleaseArgs,
+  updatePackageInfoVersionContent,
 } from "../scripts/release.mjs";
 
 describe("release script", () => {
@@ -80,6 +81,7 @@ describe("release script", () => {
     expect(plan.map((step) => step.label)).toEqual([
       "Check clean working tree",
       "Bump package version",
+      "Update embedded package version",
       "Refresh lockfile",
       "Run tests",
       "Typecheck",
@@ -106,6 +108,7 @@ describe("release script", () => {
     expect(plan.map((step) => step.label)).toEqual([
       "Check clean working tree",
       "Bump package version",
+      "Update embedded package version",
       "Refresh lockfile",
       "Stage release files",
       "Commit release",
@@ -115,5 +118,16 @@ describe("release script", () => {
       "Push tag",
     ]);
     expect(plan.every((step) => step.dryRunOnly)).toBe(true);
+  });
+
+  it("updates the embedded package version source", () => {
+    expect(
+      updatePackageInfoVersionContent(
+        'export const PACKAGE_NAME = "interviewer-cue";\nexport const PACKAGE_VERSION = "0.1.0";\n',
+        "1.2.3",
+      ),
+    ).toBe(
+      'export const PACKAGE_NAME = "interviewer-cue";\nexport const PACKAGE_VERSION = "1.2.3";\n',
+    );
   });
 });

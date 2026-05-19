@@ -18,7 +18,7 @@ describe("runInterviewerCue", () => {
     });
 
     expect(updateCheck).toHaveBeenCalledWith({
-      currentVersion: "0.1.0",
+      currentVersion: "0.2.1",
       mode: "startup",
     });
     expect(runApp).toHaveBeenCalledWith(["--resume", "/tmp/resume.pdf"]);

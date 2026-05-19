@@ -15,3 +15,4 @@ export interface ReleaseStep {
 
 export function parseReleaseArgs(argv: string[]): ReleaseOptions;
 export function buildReleasePlan(options: ReleaseOptions): ReleaseStep[];
+export function updatePackageInfoVersionContent(content: string, version: string): string;

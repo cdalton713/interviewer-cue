@@ -11,6 +11,12 @@ const NPM_LATEST_URL = `https://registry.npmjs.org/${PACKAGE_NAME}/latest`;
 const GITHUB_LATEST_RELEASE_URL = `https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest`;
 
 export type UpdateCheckMode = "startup" | "manual";
+export type GlobalPackageManager = "npm" | "pnpm" | "yarn";
+
+export interface GlobalInstallCommand {
+  command: string;
+  args: string[];
+}
 
 export type UpdateCheckResult =
   | { status: "skipped" }
@@ -30,9 +36,12 @@ export type UpdateCheckResult =
 export interface UpdateCheckDeps {
   currentVersion: string;
   mode: UpdateCheckMode;
+  argv?: string[];
+  env?: NodeJS.ProcessEnv | Record<string, string | undefined>;
   fetchJson?: (url: string) => Promise<unknown>;
   confirm?: (message: string) => Promise<boolean>;
-  install?: (packageSpec: string) => Promise<void>;
+  install?: (packageSpec: string, packageManager: GlobalPackageManager) => Promise<void>;
+  packageManager?: GlobalPackageManager;
   output?: Pick<typeof console, "log" | "error">;
 }
 
@@ -53,6 +62,12 @@ export async function runUpdateCheck(
   const fetchJson = deps.fetchJson ?? fetchJsonFromUrl;
   const install = deps.install ?? installPackageGlobally;
   const confirm = deps.confirm ?? confirmWithTerminal;
+  const packageManager =
+    deps.packageManager ??
+    detectGlobalPackageManager({
+      argv: deps.argv ?? process.argv,
+      env: deps.env ?? process.env,
+    });
 
   let latestPackage: { version: string };
   try {
@@ -89,7 +104,7 @@ export async function runUpdateCheck(
     };
   }
 
-  await install(`${PACKAGE_NAME}@latest`);
+  await install(`${PACKAGE_NAME}@latest`, packageManager);
   output.log(
     `${PACKAGE_NAME} updated to ${latestPackage.version}. Restart interviewer-cue to use it.`,
   );
@@ -98,6 +113,45 @@ export async function runUpdateCheck(
     currentVersion: deps.currentVersion,
     latestVersion: latestPackage.version,
   };
+}
+
+export function detectGlobalPackageManager(options: {
+  argv: string[];
+  env: NodeJS.ProcessEnv | Record<string, string | undefined>;
+}): GlobalPackageManager {
+  const pnpmHome = options.env.PNPM_HOME;
+  const evidence = [
+    options.env.npm_config_user_agent,
+    options.env.npm_execpath,
+    options.env._,
+    ...options.argv,
+  ].filter((value): value is string => typeof value === "string" && value.length > 0);
+
+  if (
+    evidence.some((value) => value.includes("pnpm")) ||
+    (pnpmHome ? evidence.some((value) => isPathInside(value, pnpmHome)) : false)
+  ) {
+    return "pnpm";
+  }
+
+  if (evidence.some((value) => value.includes("yarn"))) {
+    return "yarn";
+  }
+
+  return "npm";
+}
+
+export function buildGlobalInstallCommand(
+  packageSpec: string,
+  packageManager: GlobalPackageManager,
+): GlobalInstallCommand {
+  if (packageManager === "pnpm") {
+    return { command: "pnpm", args: ["add", "-g", packageSpec] };
+  }
+  if (packageManager === "yarn") {
+    return { command: "yarn", args: ["global", "add", packageSpec] };
+  }
+  return { command: "npm", args: ["install", "-g", packageSpec] };
 }
 
 export function compareSemver(left: string, right: string): number {
@@ -192,9 +246,13 @@ async function confirmWithTerminal(message: string): Promise<boolean> {
   }
 }
 
-async function installPackageGlobally(packageSpec: string): Promise<void> {
+async function installPackageGlobally(
+  packageSpec: string,
+  packageManager: GlobalPackageManager,
+): Promise<void> {
+  const installCommand = buildGlobalInstallCommand(packageSpec, packageManager);
   await new Promise<void>((resolve, reject) => {
-    const child = spawn("npm", ["install", "-g", packageSpec], {
+    const child = spawn(installCommand.command, installCommand.args, {
       stdio: "inherit",
     });
     child.once("error", reject);
@@ -206,6 +264,10 @@ async function installPackageGlobally(packageSpec: string): Promise<void> {
       reject(new Error(`npm install exited with code ${code ?? "unknown"}`));
     });
   });
+}
+
+function isPathInside(value: string, parent: string): boolean {
+  return value === parent || value.startsWith(`${parent}/`);
 }
 
 function normalizeError(error: unknown): Error {

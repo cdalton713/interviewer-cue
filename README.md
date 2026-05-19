@@ -31,10 +31,12 @@ interviewer-cue simulate-transcript
 
 ## Updates
 
-On launch, Interviewer Cue checks `https://registry.npmjs.org/interviewer-cue/latest` before entering the full-screen terminal UI. If a newer npm version is available, it prompts before running:
+On launch, Interviewer Cue checks `https://registry.npmjs.org/interviewer-cue/latest` before entering the full-screen terminal UI. If a newer npm version is available, it prompts before updating with the package manager that installed the active CLI:
 
 ```bash
 npm install -g interviewer-cue@latest
+pnpm add -g interviewer-cue@latest
+yarn global add interviewer-cue@latest
 ```
 
 After a successful update, restart `interviewer-cue`.

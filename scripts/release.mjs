@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
@@ -76,6 +76,7 @@ export function buildReleasePlan(options) {
   const steps = [
     { label: "Check clean working tree" },
     { label: "Bump package version", command: ["pnpm", "version", options.bump, "--no-git-tag-version"] },
+    { label: "Update embedded package version" },
     { label: "Refresh lockfile", command: ["pnpm", "install", "--lockfile-only"] },
   ];
 
@@ -124,6 +125,7 @@ function runRelease(options) {
 
   ensureCleanWorkingTree();
   run("Bump package version", "pnpm", ["version", options.bump, "--no-git-tag-version"]);
+  updatePackageInfoVersionFile(readPackageVersion());
   run("Refresh lockfile", "pnpm", ["install", "--lockfile-only"]);
 
   if (!options.skipVerify) {
@@ -136,7 +138,7 @@ function runRelease(options) {
   const version = readPackageVersion();
   const tag = `v${version}`;
 
-  run("Stage release files", "git", ["add", "package.json", "pnpm-lock.yaml"]);
+  run("Stage release files", "git", ["add", "package.json", "pnpm-lock.yaml", "src/cli/package-info.ts"]);
   run("Commit release", "git", ["commit", "-m", `chore: release ${tag}`]);
   run("Create annotated tag", "git", ["tag", "-a", tag, "-m", tag]);
 
@@ -176,6 +178,22 @@ function readPackageVersion() {
     throw new Error("package.json version is missing");
   }
   return pkg.version;
+}
+
+export function updatePackageInfoVersionContent(content, version) {
+  const next = content.replace(
+    /export const PACKAGE_VERSION = "([^"]+)";/u,
+    `export const PACKAGE_VERSION = "${version}";`,
+  );
+  if (next === content) {
+    throw new Error("Unable to find PACKAGE_VERSION in src/cli/package-info.ts");
+  }
+  return next;
+}
+
+function updatePackageInfoVersionFile(version) {
+  const path = "src/cli/package-info.ts";
+  writeFileSync(path, updatePackageInfoVersionContent(readFileSync(path, "utf8"), version));
 }
 
 function run(label, command, args) {
