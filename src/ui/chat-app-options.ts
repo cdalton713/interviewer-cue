@@ -2,7 +2,7 @@ import type { ApiKeyField, SettingsSection } from "./chat-app-types.js";
 
 export const AI_LOADING_SPINNER_FRAMES = ["-", "\\", "|", "/"] as const;
 export const AI_LOADING_SPINNER_INTERVAL_MS = 120;
-export const MAX_VISIBLE_QUESTIONS = 6;
+export const MAX_VISIBLE_QUESTIONS = 3;
 export const RECENT_TRANSCRIPT_LINES = 6;
 
 export const uiColor = {

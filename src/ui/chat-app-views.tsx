@@ -182,6 +182,7 @@ export function LiveInterviewView({
   aiError,
   activeQuestions,
   selectedQuestionIndex,
+  showTranscript,
 }: {
   status: ConsoleStatus;
   statusEvents: Array<SystemConsoleEvent | ErrorConsoleEvent>;
@@ -192,6 +193,7 @@ export function LiveInterviewView({
   aiError: string | null;
   activeQuestions: InterviewQuestion[];
   selectedQuestionIndex: number;
+  showTranscript: boolean;
 }) {
   const firstVisibleQuestionIndex = getFirstVisibleQuestionIndex(
     selectedQuestionIndex,
@@ -204,7 +206,7 @@ export function LiveInterviewView({
   );
 
   return (
-    <Box flexDirection="column" paddingY={1}>
+    <Box flexDirection="column">
       <SectionTitle label="Live Interview" />
       <Box
         flexDirection="column"
@@ -232,21 +234,23 @@ export function LiveInterviewView({
           })
         )}
       </Box>
-      <Box flexDirection="column" marginTop={2}>
-        <Text color={uiColor.muted} bold>
-          Recent transcript
-        </Text>
-        {statusEvents.map((event) => (
-          <StatusLine key={`${event.type}:${event.id}`} event={event} />
-        ))}
-        {visibleTranscriptEvents.length === 0 ? (
-          <Text color={uiColor.muted}>Waiting for new transcript changes...</Text>
-        ) : (
-          visibleTranscriptEvents.slice(-RECENT_TRANSCRIPT_LINES).map((event) => (
-            <CompactTranscriptLine key={event.id} event={event} />
-          ))
-        )}
-      </Box>
+      {showTranscript ? (
+        <Box flexDirection="column">
+          <Text color={uiColor.muted} bold>
+            Recent transcript
+          </Text>
+          {statusEvents.map((event) => (
+            <StatusLine key={`${event.type}:${event.id}`} event={event} />
+          ))}
+          {visibleTranscriptEvents.length === 0 ? (
+            <Text color={uiColor.muted}>Waiting for new transcript changes...</Text>
+          ) : (
+            visibleTranscriptEvents.slice(-RECENT_TRANSCRIPT_LINES).map((event) => (
+              <CompactTranscriptLine key={event.id} event={event} />
+            ))
+          )}
+        </Box>
+      ) : null}
       <Box justifyContent="space-between">
         <Text color={status === "error" ? uiColor.danger : uiColor.healthy} bold>
           status {status}
@@ -254,7 +258,7 @@ export function LiveInterviewView({
         <Text color={uiColor.muted}>lines {transcriptEvents.length}</Text>
       </Box>
       <Text color={uiColor.muted}>
-        keys ↑/↓ select · p pin · delete remove · r regenerate · g general · l live · a analyze with Granola · d dashboard
+        keys ↑/↓ select · p pin · delete remove · r regenerate · g general · l live · t transcript · a analyze with Granola · d dashboard
       </Text>
     </Box>
   );
@@ -777,9 +781,15 @@ function QuestionLine({
 }) {
   const marker = selected ? ">" : " ";
   const pinnedLabel = question.pinned ? "[pinned] " : "";
+  const selectedDetail = [
+    question.focus ? `focus: ${question.focus}` : null,
+    question.rationale,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" · ");
 
   return (
-    <Box flexDirection="column" marginTop={1}>
+    <Box flexDirection="column">
       <Text
         bold={selected}
         inverse={selected}
@@ -790,11 +800,11 @@ function QuestionLine({
         {marker} {pinnedLabel}
         {index + 1}. {question.question}
       </Text>
-      {question.focus ? (
-        <Text color={uiColor.pinned}>   focus: {question.focus}</Text>
-      ) : null}
-      {question.rationale ? (
-        <Text color={uiColor.muted}>   {question.rationale}</Text>
+      {selected && selectedDetail ? (
+        <Text color={uiColor.muted}>
+          {"   "}
+          {selectedDetail}
+        </Text>
       ) : null}
     </Box>
   );
@@ -831,8 +841,8 @@ function CompactTranscriptLine({ event }: { event: TranscriptConsoleEvent }) {
   const speakerColor = getSpeakerColor(event);
 
   return (
-    <Box marginBottom={1}>
-      <Text>
+    <Box>
+      <Text wrap="truncate">
         <Text color={event.isFinal === false ? uiColor.pinned : speakerColor} bold>
           {event.speaker ?? "transcript"}
           {event.isFinal === false ? " ..." : ""}

@@ -165,6 +165,7 @@ interface ChatAppState {
   newInterviewResumePath: string;
   newInterviewCandidateName: string;
   questionPanelMode: QuestionPanelMode;
+  showTranscript: boolean;
   selectedQuestionIndex: number;
   generalQuestions: InterviewQuestion[];
   liveQuestions: InterviewQuestion[];
@@ -208,6 +209,7 @@ function createInitialChatAppState({
     newInterviewResumePath: resumePath ?? "",
     newInterviewCandidateName: "",
     questionPanelMode: "general",
+    showTranscript: false,
     selectedQuestionIndex: 0,
     generalQuestions: [],
     liveQuestions: [],
@@ -291,6 +293,7 @@ export function ChatApp({
     newInterviewResumePath,
     newInterviewCandidateName,
     questionPanelMode,
+    showTranscript,
     selectedQuestionIndex,
     generalQuestions,
     liveQuestions,
@@ -310,7 +313,8 @@ export function ChatApp({
   const resumePickInFlightRef = useRef(false);
   const startAfterResumePickRef = useRef(false);
   const aiRequestCounterRef = useRef(0);
-  const lastLiveCallAtRef = useRef(0);
+  const lastLiveCallAtRef = useRef<number | null>(null);
+  const lastLiveTranscriptTimeMsRef = useRef<number | null>(null);
   const lastLiveTranscriptLengthRef = useRef(0);
   const debounceMs = liveQuestionOptions.debounceMs ?? 2000;
   const minIntervalMs = liveQuestionOptions.minIntervalMs ?? 30000;
@@ -879,6 +883,12 @@ export function ChatApp({
         forceRegenerateLiveQuestions();
         return;
       }
+      if (input === "t") {
+        updateAppState((draft) => {
+          draft.showTranscript = !draft.showTranscript;
+        });
+        return;
+      }
       if (input === "g") patchAppState({ questionPanelMode: "general", selectedQuestionIndex: 0 });
       if (input === "l") patchAppState({ questionPanelMode: "live", selectedQuestionIndex: 0 });
       if (input === "d") patchAppState({ mode: "dashboard" });
@@ -1220,6 +1230,7 @@ export function ChatApp({
       sessionId: context.session.id,
       transcriptText: context.transcriptText,
       promptTranscriptText: context.promptTranscriptText,
+      latestTranscriptTimeMs: context.latestTranscriptTimeMs,
       trigger: "manual",
     });
   }
@@ -1247,6 +1258,7 @@ export function ChatApp({
       promptTranscriptText: buildLiveGenerationPromptTranscriptText(
         currentTranscriptEvents,
       ),
+      latestTranscriptTimeMs: getLatestTranscriptTimeMs(currentTranscriptEvents),
     };
   }
 
@@ -1283,11 +1295,16 @@ export function ChatApp({
       liveModelId ??
       modelId ??
       stateRef.current.appSettings.selectedLiveModelId;
-    const delay = Math.max(
-      debounceMs,
-      minIntervalMs - (Date.now() - lastLiveCallAtRef.current),
-      0,
+    const elapsedSinceLastLiveCall = getElapsedSinceLastLiveCallMs(
+      context.latestTranscriptTimeMs,
+      lastLiveTranscriptTimeMsRef.current,
+      lastLiveCallAtRef.current,
     );
+    const intervalDelay =
+      elapsedSinceLastLiveCall === null
+        ? 0
+        : Math.max(minIntervalMs - elapsedSinceLastLiveCall, 0);
+    const delay = Math.max(debounceMs, intervalDelay, 0);
     logger.log({
       event: "live_generation.scheduled",
       sessionId: context.session.id,
@@ -1305,6 +1322,7 @@ export function ChatApp({
         sessionId: latestContext.session.id,
         transcriptText: latestContext.transcriptText,
         promptTranscriptText: latestContext.promptTranscriptText,
+        latestTranscriptTimeMs: latestContext.latestTranscriptTimeMs,
         trigger: "auto",
       });
     }, delay);
@@ -1314,11 +1332,13 @@ export function ChatApp({
     sessionId,
     transcriptText,
     promptTranscriptText,
+    latestTranscriptTimeMs,
     trigger,
   }: {
     sessionId: string;
     transcriptText: string;
     promptTranscriptText: string;
+    latestTranscriptTimeMs: number | null;
     trigger: "auto" | "manual";
   }) {
     if (liveInFlightRef.current || !stateRef.current.activeSessionId) {
@@ -1406,6 +1426,7 @@ export function ChatApp({
       persistActiveSession({ liveQuestions: nextLiveQuestions });
       lastLiveTranscriptLengthRef.current = transcriptText.length;
       lastLiveCallAtRef.current = Date.now();
+      lastLiveTranscriptTimeMsRef.current = latestTranscriptTimeMs;
       patchAppState({ aiStatus: "idle" });
     } catch (error) {
       logger.log({
@@ -1637,7 +1658,7 @@ export function ChatApp({
   }
 
   return (
-    <Box flexDirection="column" minHeight={24}>
+    <Box flexDirection="column">
       <Header
         mode={mode}
         pdfModelId={effectivePdfModelId}
@@ -1671,6 +1692,7 @@ export function ChatApp({
           aiError={aiError}
           activeQuestions={activeQuestions}
           selectedQuestionIndex={selectedQuestionIndex}
+          showTranscript={showTranscript}
         />
       ) : null}
       {mode === "past" ? (
@@ -1727,6 +1749,39 @@ function createAiRequestId(
 ): string {
   counterRef.current += 1;
   return `${prefix}-${Date.now().toString(36)}-${counterRef.current}`;
+}
+
+function getLatestTranscriptTimeMs(events: TranscriptConsoleEvent[]): number | null {
+  let latest: number | null = null;
+  for (const event of events) {
+    if (!isLiveGenerationTranscriptEvent(event)) continue;
+    const timestamp =
+      parseTranscriptTimeMs(event.endTimestamp) ??
+      parseTranscriptTimeMs(event.startTimestamp);
+    if (timestamp === null) continue;
+    latest = latest === null ? timestamp : Math.max(latest, timestamp);
+  }
+  return latest;
+}
+
+function getElapsedSinceLastLiveCallMs(
+  latestTranscriptTimeMs: number | null,
+  lastLiveTranscriptTimeMs: number | null,
+  lastLiveCallAtMs: number | null,
+): number | null {
+  if (latestTranscriptTimeMs !== null && lastLiveTranscriptTimeMs !== null) {
+    return Math.max(0, latestTranscriptTimeMs - lastLiveTranscriptTimeMs);
+  }
+  if (lastLiveCallAtMs === null) return null;
+  return Math.max(0, Date.now() - lastLiveCallAtMs);
+}
+
+function parseTranscriptTimeMs(value: string | undefined): number | null {
+  if (!value) return null;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) return numeric * 1000;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function formatErrorForLog(error: unknown) {

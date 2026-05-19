@@ -27,6 +27,7 @@ interviewer-cue simulate-transcript
 ```
 
 `interviewer-cue` launches the Ink app. Granola-specific cache tools live under the `granola` provider namespace because they inspect or watch Granola local cache files directly.
+`interviewer-cue simulate-transcript` decrypts the local Granola cache, lets you choose a recent transcript, and replays it in transcript-time steps for fast AI response testing.
 
 ## Updates
 
@@ -162,7 +163,7 @@ pnpm build
 pnpm pack:dry-run
 ```
 
-The dry-run pack output should include `dist`, `fixtures/simulation/technical-interview.md`, `README.md`, `LICENSE`, and `package.json`.
+The dry-run pack output should include `dist`, `README.md`, `LICENSE`, and `package.json`.
 
 If the release fails at `npm publish`, the version commit and annotated tag have already been created locally. Do not rerun the full release command for the same version; fix npm authentication, then publish from the existing release commit:
 

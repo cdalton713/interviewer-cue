@@ -471,7 +471,7 @@ describe("ChatApp", () => {
     await wait(0);
     expect(lastFrame()).toContain("l Live Interview");
 
-    await typeText(stdin, "l");
+    await typeText(stdin, "lt");
     await wait(0);
 
     expect(fake.start).toHaveBeenCalledOnce();
@@ -491,7 +491,7 @@ describe("ChatApp", () => {
     );
 
     await wait(0);
-    await typeText(stdin, "l");
+    await typeText(stdin, "lt");
     await wait(0);
 
     const frame = lastFrame() ?? "";
@@ -523,7 +523,7 @@ describe("ChatApp", () => {
     }
   });
 
-  it("renders live questions before a compact recent transcript strip", async () => {
+  it("hides the recent transcript strip by default on the live interview screen", async () => {
     const fake = createFakeEventSource();
     const { lastFrame, stdin } = render(
       <ChatApp
@@ -538,6 +538,27 @@ describe("ChatApp", () => {
     await wait(0);
 
     const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("general questions");
+    expect(frame).not.toContain("Recent transcript");
+    expect(frame).not.toContain("Existing words.");
+    expect(frame).toContain("t transcript");
+  });
+
+  it("toggles the recent transcript strip on from the live interview screen", async () => {
+    const fake = createFakeEventSource();
+    const { lastFrame, stdin } = render(
+      <ChatApp
+        createEventSource={fake.createEventSource}
+        loadInterviewTypes={async () => [technicalTemplate]}
+        loadInterviewSessions={async () => [activeSession]}
+      />,
+    );
+
+    await wait(0);
+    await typeText(stdin, "lt");
+    await wait(0);
+
+    const frame = stripAnsi(lastFrame() ?? "");
     expect(frame.indexOf("general questions")).toBeGreaterThan(-1);
     expect(frame.indexOf("Recent transcript")).toBeGreaterThan(-1);
     expect(frame.indexOf("general questions")).toBeLessThan(
@@ -546,7 +567,7 @@ describe("ChatApp", () => {
     expect(frame).toContain("Existing words.");
   });
 
-  it("shows the six most recent transcript lines under live questions", async () => {
+  it("shows the six most recent transcript lines when the transcript strip is visible", async () => {
     const fake = createFakeEventSource();
     const sessionWithTranscriptHistory: InterviewSession = {
       ...activeSession,
@@ -570,13 +591,53 @@ describe("ChatApp", () => {
     );
 
     await wait(0);
-    await typeText(stdin, "l");
+    await typeText(stdin, "lt");
     await wait(0);
 
     const frame = stripAnsi(lastFrame() ?? "");
     expect(frame).not.toContain("Transcript line 1.");
     expect(frame).toContain("Transcript line 2.");
     expect(frame).toContain("Transcript line 7.");
+  });
+
+  it("keeps the live interview frame within a compact terminal height", async () => {
+    const fake = createFakeEventSource();
+    const sessionWithDenseLiveState: InterviewSession = {
+      ...activeSession,
+      transcriptEvents: Array.from({ length: 6 }, (_, index) => ({
+        type: "transcript",
+        id: `docA:utt${index + 1}`,
+        documentId: "docA",
+        utteranceId: `utt${index + 1}`,
+        text: `Transcript line ${index + 1} with enough detail to wrap in a narrow terminal and previously force the live view to exceed the terminal viewport.`,
+        observedAt: `2026-05-11T00:0${index}:00.000Z`,
+        speaker: "candidate",
+        isFinal: true,
+      })),
+      generalQuestions: Array.from({ length: 6 }, (_, index) => ({
+        question: `Saved question ${index + 1} with enough context to wrap and consume multiple terminal rows?`,
+        focus: "Technical leadership, scope judgment",
+        rationale:
+          "Probes technical judgment, scope control, and the ability to make hard tradeoffs.",
+      })),
+    };
+    const { lastFrame, stdin } = render(
+      <ChatApp
+        createEventSource={fake.createEventSource}
+        loadInterviewTypes={async () => [technicalTemplate]}
+        loadInterviewSessions={async () => [sessionWithDenseLiveState]}
+      />,
+    );
+
+    await wait(0);
+    await typeText(stdin, "l");
+    await wait(0);
+
+    const lines = stripAnsi(lastFrame() ?? "").split("\n");
+    expect(lines.length).toBeLessThanOrEqual(24);
+    expect(lines.join("\n")).toContain("multiple terminal rows?");
+    expect(lines.join("\n")).toContain("status watching");
+    expect(lines.join("\n")).toContain("keys ↑/↓ select");
   });
 
   it("selects, pins, and deletes individual live-session questions", async () => {
@@ -713,7 +774,7 @@ describe("ChatApp", () => {
       | undefined;
     expect(savedSessions?.[1]?.resumePath).toBeUndefined();
     expect(lastFrame()).toContain("Live Interview");
-    expect(lastFrame()).toContain("Waiting for new transcript changes");
+    expect(lastFrame()).not.toContain("Waiting for new transcript changes");
     expect(lastFrame()).not.toContain("AI error:");
     expect(lastFrame()).not.toContain("Existing words.");
     expect(lastFrame()).not.toContain("Saved resume question?");
@@ -1179,6 +1240,104 @@ describe("ChatApp", () => {
     );
   });
 
+  it("uses transcript timestamps for live question generation interval gating", async () => {
+    vi.useFakeTimers();
+    const fake = createFakeEventSource();
+    const generateLiveQuestions = vi.fn().mockResolvedValue([
+      {
+        question: "What changed operationally?",
+      },
+    ]);
+    render(
+      <ChatApp
+        createEventSource={fake.createEventSource}
+        initialInterviewTypeId="technical"
+        loadAppSettings={async () => ({
+          apiKeys: {
+            openaiApiKey: "",
+            googleGenerativeAiApiKey: "google-key",
+            anthropicApiKey: "",
+            anthropicAuthToken: "",
+          },
+          selectedPdfModelId: "openai:gpt-5",
+          selectedLiveModelId: "google:gemini-2.5-flash",
+        })}
+        loadInterviewTypes={async () => [technicalTemplate]}
+        loadInterviewSessions={async () => []}
+        saveInterviewSessions={vi.fn().mockResolvedValue(undefined)}
+        generateLiveQuestions={generateLiveQuestions}
+        liveQuestionOptions={{
+          debounceMs: 10,
+          minIntervalMs: 60000,
+          minNewTranscriptChars: 20,
+        }}
+      />,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    act(() => {
+      fake.callbacks.transcriptDiff?.({
+        type: "transcript_diff",
+        observedAt: "2026-05-11T12:00:00.000Z",
+        activeDocumentId: "docA",
+        added: [
+          {
+            key: "docA:utt1",
+            documentId: "docA",
+            utterance: {
+              id: "utt1",
+              text: "We introduced a durable queue to remove write bottlenecks.",
+              source: "candidate",
+              start_timestamp: "0",
+              end_timestamp: "0",
+              is_final: true,
+            },
+          },
+        ],
+        updated: [],
+      });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(15);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(generateLiveQuestions).toHaveBeenCalledOnce();
+
+    act(() => {
+      fake.callbacks.transcriptDiff?.({
+        type: "transcript_diff",
+        observedAt: "2026-05-11T12:00:01.000Z",
+        activeDocumentId: "docA",
+        added: [
+          {
+            key: "docA:utt2",
+            documentId: "docA",
+            utterance: {
+              id: "utt2",
+              text: "Sixty seconds later the candidate tied retries to isolation.",
+              source: "candidate",
+              start_timestamp: "60",
+              end_timestamp: "60",
+              is_final: true,
+            },
+          },
+        ],
+        updated: [],
+      });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(15);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(generateLiveQuestions).toHaveBeenCalledTimes(2);
+  });
+
   it("excludes microphone utterances from live question generation", async () => {
     vi.useFakeTimers();
     const fake = createFakeEventSource();
@@ -1459,7 +1618,7 @@ describe("ChatApp", () => {
 
   it("keeps successive live transcript diffs in the visible session", async () => {
     const fake = createFakeEventSource();
-    const { lastFrame } = render(
+    const { lastFrame, stdin } = render(
       <ChatApp
         createEventSource={fake.createEventSource}
         initialInterviewTypeId="technical"
@@ -1499,14 +1658,17 @@ describe("ChatApp", () => {
       });
     });
 
+    await typeText(stdin, "t");
+    await wait(0);
+
     expect(lastFrame()).toContain("First answer.");
     expect(lastFrame()).toContain("Second answer.");
   });
 
-  it("renders simulation-source transcript events and persists them to the active session", async () => {
+  it("renders replay transcript events and persists them to the active session", async () => {
     const fake = createFakeEventSource();
     const saveInterviewSessions = vi.fn().mockResolvedValue(undefined);
-    const { lastFrame } = render(
+    const { lastFrame, stdin } = render(
       <ChatApp
         createEventSource={fake.createEventSource}
         initialInterviewTypeId="technical"
@@ -1520,7 +1682,7 @@ describe("ChatApp", () => {
     act(() => {
       fake.callbacks.started?.({
         type: "watch_started",
-        granolaDir: "simulation://sim-demo",
+        granolaDir: "granola-replay://sim-demo",
         intervalMs: 0,
         transcriptDocuments: 1,
         activeDocumentId: "sim-demo",
@@ -1545,7 +1707,11 @@ describe("ChatApp", () => {
       });
     });
 
-    expect(lastFrame()).toContain("simulation://sim-demo");
+    expect(lastFrame()).not.toContain("granola-replay://sim-demo");
+    await typeText(stdin, "t");
+    await wait(0);
+
+    expect(lastFrame()).toContain("granola-replay://sim-demo");
     expect(lastFrame()).toContain("Tell me about the queueing design.");
     expect(saveInterviewSessions).toHaveBeenLastCalledWith([
       expect.objectContaining({

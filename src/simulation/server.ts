@@ -6,7 +6,7 @@ import type {
 } from "../granola/event-source.js";
 import type { GranolaTranscriptUtterance } from "../granola/types.js";
 import { encodeSimulationEvent } from "./protocol.js";
-import type { SimulationScenario } from "./scenario.js";
+import type { SimulationScenario } from "./replay-scenario.js";
 
 export interface SimulationTranscriptServer {
   readonly url: string;
@@ -161,7 +161,7 @@ function createWatchStartedEvent(
 ): GranolaWatchStartedEvent {
   return {
     type: "watch_started",
-    granolaDir: `simulation://${scenario.documentId}`,
+    granolaDir: `granola-replay://${scenario.documentId}`,
     intervalMs: 0,
     transcriptDocuments: 1,
     activeDocumentId: scenario.documentId,

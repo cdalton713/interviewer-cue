@@ -18,7 +18,6 @@
   },
   "files": [
     "dist",
-    "fixtures/simulation/technical-interview.md",
     "README.md",
     "LICENSE"
   ],

@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GranolaEventSourceCallbacks } from "../src/granola/event-source.js";
 import { createSimulationClientEventSource } from "../src/simulation/client-event-source.js";
 import { parseTcpUrl } from "../src/simulation/protocol.js";
-import { parseSimulationScenario } from "../src/simulation/scenario.js";
 import { createSimulationTranscriptServer } from "../src/simulation/server.js";
 
 describe("simulation transcript client/server", () => {
@@ -36,7 +35,7 @@ describe("simulation transcript client/server", () => {
 
     expect(callbacks.started).toHaveBeenCalledWith({
       type: "watch_started",
-      granolaDir: "simulation://sim-demo",
+      granolaDir: "granola-replay://sim-demo",
       intervalMs: 0,
       transcriptDocuments: 1,
       activeDocumentId: "sim-demo",
@@ -123,16 +122,40 @@ describe("simulation transcript client/server", () => {
 });
 
 function parseDemoScenario() {
-  return parseSimulationScenario(`
-# Demo
-@document sim-demo
-
-## 00:00
-Interviewer: Tell me about the queueing design.
-
-## 00:30
-Candidate: We introduced a durable queue.
-`);
+  return {
+    title: "Demo",
+    documentId: "sim-demo",
+    hunks: [
+      {
+        label: "00:00",
+        startSeconds: 0,
+        utterances: [
+          {
+            id: "sim-demo-0000-1",
+            source: "Interviewer",
+            text: "Tell me about the queueing design.",
+            start_timestamp: "0",
+            end_timestamp: "0",
+            is_final: true,
+          },
+        ],
+      },
+      {
+        label: "00:30",
+        startSeconds: 30,
+        utterances: [
+          {
+            id: "sim-demo-0030-1",
+            source: "Candidate",
+            text: "We introduced a durable queue.",
+            start_timestamp: "30",
+            end_timestamp: "30",
+            is_final: true,
+          },
+        ],
+      },
+    ],
+  };
 }
 
 function createCallbacks() {

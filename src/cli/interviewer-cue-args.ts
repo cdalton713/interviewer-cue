@@ -85,7 +85,7 @@ Commands:
   interviewer-cue                         Launch the interview cue app
   interviewer-cue granola decrypt-cache   Decrypt and inspect the Granola cache
   interviewer-cue granola watch-cache     Watch Granola transcript cache changes
-  interviewer-cue simulate-transcript     Run the transcript simulation sidecar
+  interviewer-cue simulate-transcript     Replay a cached Granola transcript
   interviewer-cue update                  Check for and install the latest package
 `;
 }
